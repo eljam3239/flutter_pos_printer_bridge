@@ -262,13 +262,159 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // TODO: Wire to actual printer connection based on _selectedBrand
-      setState(() => _isConnected = true);
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
-      );
+      switch (_selectedBrand!) {
+        case PrinterBrand.epson:
+          if (_discoveredPrinters.isEmpty) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No printers discovered. Please discover printers first.')),
+            );
+            return;
+          }
+          if (_selectedPrinter == null) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Please select a printer first.')),
+            );
+            return;
+          }
+
+          try {
+            if (_isConnected) {
+              await EpsonPrinter.disconnect();
+              setState(() => _isConnected = false);
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+
+            final printerString = _selectedPrinter!;
+            final lastColonIndex = printerString.lastIndexOf(':');
+            String target = lastColonIndex != -1
+                ? printerString.substring(0, lastColonIndex)
+                : printerString;
+
+            EpsonPortType interfaceType;
+            final macRegex = RegExp(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$');
+            if (target.startsWith('TCP:') || target.startsWith('TCPS:')) {
+              interfaceType = EpsonPortType.tcp;
+            } else if (target.startsWith('BT:')) {
+              interfaceType = EpsonPortType.bluetooth;
+            } else if (target.startsWith('BLE:')) {
+              interfaceType = EpsonPortType.bluetoothLe;
+            } else if (target.startsWith('USB:')) {
+              interfaceType = EpsonPortType.usb;
+            } else if (macRegex.hasMatch(target)) {
+              interfaceType = EpsonPortType.bluetooth;
+              target = 'BT:$target';
+            } else {
+              interfaceType = EpsonPortType.tcp;
+            }
+
+            final settings = EpsonConnectionSettings(
+              portType: interfaceType,
+              identifier: target,
+              timeout: interfaceType == EpsonPortType.bluetoothLe ? 30000 : 15000,
+            );
+
+            await EpsonPrinter.connect(settings);
+            setState(() => _isConnected = true);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
+            );
+          } catch (e) {
+            setState(() => _isConnected = false);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connection failed: $e')),
+            );
+          }
+          break;
+        case PrinterBrand.star:
+          if (_discoveredPrinters.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No printers discovered. Please discover printers first.')),
+            );
+            return;
+          }
+
+          if (_selectedPrinter == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Please select a printer first.')),
+            );
+            return;
+          }
+
+          try {
+            // Disconnect from current printer if connected
+            if (_isConnected) {
+              print('DEBUG: Disconnecting from current printer before new connection...');
+              await StarPrinter.disconnect();
+              setState(() {
+                _isConnected = false;
+              });
+              // Small delay to ensure clean disconnect
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+            
+            final printerString = _selectedPrinter!; // Use selected printer instead of first
+            
+            // Parse the printer string to determine interface type
+            StarInterfaceType interfaceType;
+            String identifier;
+            
+            if (printerString.startsWith('LAN:')) {
+              interfaceType = StarInterfaceType.lan;
+              // Extract just the identifier part (MAC address or IP), ignore model info
+              final parts = printerString.substring(4).split(':');
+              identifier = parts[0]; // Take first part before any model info
+            } else if (printerString.startsWith('BT:')) {
+              interfaceType = StarInterfaceType.bluetooth;
+              final parts = printerString.substring(3).split(':');
+              identifier = parts[0]; // Take first part before any model info
+            } else if (printerString.startsWith('BLE:')) {
+              interfaceType = StarInterfaceType.bluetoothLE;
+              final parts = printerString.substring(4).split(':');
+              identifier = parts[0]; // Take first part before any model info
+            } else if (printerString.startsWith('USB:')) {
+              interfaceType = StarInterfaceType.usb;
+              final parts = printerString.substring(4).split(':');
+              identifier = parts[0]; // Take first part before any model info
+            } else {
+              interfaceType = StarInterfaceType.lan;
+              identifier = printerString.split(':')[0]; // Take first part
+            }
+            
+            print('DEBUG: Connecting to $interfaceType printer: $identifier (Selected: $printerString)');
+            
+            final settings = StarConnectionSettings(
+              interfaceType: interfaceType,
+              identifier: identifier,
+            );
+            await StarPrinter.connect(settings);
+            setState(() {
+              _isConnected = true;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')), // Show printer model
+            );
+          } catch (e) {
+            print('DEBUG: Connection error: $e');
+            setState(() {
+              _isConnected = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connection failed: $e')),
+            );
+          }
+          break;
+        case PrinterBrand.zebra:
+          // TODO: Implement Zebra connection when available
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Zebra printer connection not yet implemented')),
+          );
+          break;
+      }
     } catch (e) {
       setState(() => _isConnected = false);
       if (!mounted) return;
@@ -314,7 +460,20 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _disconnectFromPrinter() async {
     try {
-      // TODO: Wire to actual disconnection based on _selectedBrand
+      if (_selectedBrand != null && _isConnected) {
+        switch (_selectedBrand!) {
+          case PrinterBrand.epson:
+            await EpsonPrinter.disconnect();
+            break;
+          case PrinterBrand.star:
+            await StarPrinter.disconnect();
+            break;
+          case PrinterBrand.zebra:
+            // TODO: Wire Zebra disconnect when available
+            break;
+        }
+      }
+      
       setState(() => _isConnected = false);
       
       if (!mounted) return;
@@ -322,6 +481,7 @@ class _MyHomePageState extends State<MyHomePage> {
         const SnackBar(content: Text('Disconnected from printer')),
       );
     } catch (e) {
+      setState(() => _isConnected = false);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Disconnect failed: $e')),
@@ -458,7 +618,16 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Text(brand.displayName),
                 );
               }).toList(),
-              onChanged: (PrinterBrand? newValue) {
+              onChanged: (PrinterBrand? newValue) async {
+                // If currently connected, disconnect first
+                if (_isConnected && _selectedBrand != null) {
+                  try {
+                    await _disconnectFromPrinter();
+                  } catch (e) {
+                    print('DEBUG: Failed to disconnect when switching brands: $e');
+                  }
+                }
+                
                 setState(() {
                   _selectedBrand = newValue;
                   // Reset printer state when brand changes
