@@ -43,11 +43,3 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-
-# epson related
-packages/epson/epson_printer_android/android/libs
-packages/epson/epson_printer_android/android/src/main/jniLibs
-packages/epson/epson_printer_ios/ios/Frameworks
-
-#star related
-packages/star/star_printer_ios/ios/StarIO10.xcframework

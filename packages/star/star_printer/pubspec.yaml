@@ -1,0 +1,30 @@
+name: star_printer
+description: A Flutter plugin for Star Micronics printers with support for iOS and Android.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  star_printer_platform_interface:
+    path: ../star_printer_platform_interface
+  star_printer_ios:
+    path: ../star_printer_ios
+  star_printer_android:
+    path: ../star_printer_android
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        default_package: star_printer_ios
+      android:
+        default_package: star_printer_android

@@ -45,6 +45,11 @@ dependencies:
   epson_printer:
     path: packages/epson/epson_printer
 
+  # Star printer plugin
+  star_printer:
+    path: packages/star/star_printer
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
