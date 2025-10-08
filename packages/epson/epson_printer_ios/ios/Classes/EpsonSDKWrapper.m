@@ -1,0 +1,528 @@
+//
+//  EpsonSDKWrapper.m
+//
+
+#import "EpsonSDKWrapper.h"
+#import <UIKit/UIKit.h>
+
+// Private interface
+@interface EpsonSDKWrapper ()
+- (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback;
+@end
+
+@implementation EpsonSDKWrapper
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _discoveredPrinters = [[NSMutableArray alloc] init];
+    }
+    return self;
+}
+
+- (void)startDiscoveryWithFilter:(int32_t)filter completion:(void (^)(NSArray<NSDictionary *> *))completion {
+    NSLog(@"Starting discovery with filter: %d", filter);
+    if (!completion) { NSLog(@"ERROR: No completion handler provided for discovery"); return; }
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            // Stop any existing discovery first (loop until not processing)
+            int stopRet = EPOS2_SUCCESS;
+            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            
+            [self.discoveredPrinters removeAllObjects];
+            self.discoveryCompletionHandler = completion;
+            
+            Epos2FilterOption *filterOption = [[Epos2FilterOption alloc] init];
+            if (!filterOption) { NSLog(@"ERROR: Failed to create filter option"); completion(@[]); self.discoveryCompletionHandler = nil; return; }
+            
+            // Match sample: restrict to printers and set port type if provided
+            [filterOption setDeviceType:EPOS2_TYPE_PRINTER];
+            if (filter != EPOS2_PARAM_UNSPECIFIED) {
+                [filterOption setPortType:filter];
+            }
+            
+            NSLog(@"Created filter option (deviceType=PRINTER, portType=%d), starting discovery...", filter);
+            int32_t result = [Epos2Discovery start:filterOption delegate:self];
+            NSLog(@"Discovery start result: %d (EPOS2_SUCCESS=0)", result);
+            if (result != EPOS2_SUCCESS) { completion(@[]); self.discoveryCompletionHandler = nil; return; }
+            
+            // Timeout: 10s then stop (on main) and complete
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSLog(@"Discovery timeout reached, stopping discovery...");
+                int sret = EPOS2_SUCCESS;
+                do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+                if (self.discoveryCompletionHandler) {
+                    self.discoveryCompletionHandler([self.discoveredPrinters copy]);
+                    self.discoveryCompletionHandler = nil;
+                }
+            });
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in startDiscovery: %@", exception);
+            completion(@[]);
+            self.discoveryCompletionHandler = nil;
+        }
+    });
+}
+
+- (void)stopDiscovery {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int result = EPOS2_SUCCESS;
+        do { result = [Epos2Discovery stop]; } while (result == EPOS2_ERR_PROCESSING);
+    });
+}
+
+- (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout {
+    NSLog(@"Connecting to printer with target: %@, series: %d, language: %d, timeout: %d", target, series, language, timeout);
+    
+    if (self.printer) {
+        NSLog(@"Disconnecting existing printer connection...");
+        [self.printer disconnect];
+        self.printer = nil;
+    }
+    
+    NSLog(@"Creating new printer instance...");
+    self.printer = [[Epos2Printer alloc] initWithPrinterSeries:series lang:language];
+    if (!self.printer) {
+        NSLog(@"ERROR: Failed to create printer instance");
+        return NO;
+    }
+    
+    NSLog(@"Setting receive event delegate...");
+    [self.printer setReceiveEventDelegate:self];
+    
+    NSLog(@"Attempting to connect to target: %@", target);
+    int32_t result;
+    if ([target hasPrefix:@"BLE:"]) {
+        NSLog(@"Using BLE connection with 30s timeout");
+        result = [self.printer connect:target timeout:30000]; // 30 second timeout for BLE
+    } else {
+        NSLog(@"Using standard connection with %d ms timeout", timeout);
+        result = [self.printer connect:target timeout:timeout];
+    }
+    
+    NSLog(@"Connection result: %d", result);
+    
+    if (result != EPOS2_SUCCESS) {
+        NSLog(@"Connection failed with result: %d", result);
+        
+        // Log detailed error information
+        switch (result) {
+            case EPOS2_ERR_PARAM:
+                NSLog(@"ERROR: Invalid parameter");
+                break;
+            case EPOS2_ERR_CONNECT:
+                NSLog(@"ERROR: Connection error - printer may be offline or unreachable");
+                break;
+            case EPOS2_ERR_TIMEOUT:
+                NSLog(@"ERROR: Connection timeout");
+                break;
+            case EPOS2_ERR_MEMORY:
+                NSLog(@"ERROR: Memory allocation error");
+                break;
+            case EPOS2_ERR_ILLEGAL:
+                NSLog(@"ERROR: Illegal operation");
+                break;
+            case EPOS2_ERR_PROCESSING:
+                NSLog(@"ERROR: Processing error");
+                break;
+            default:
+                NSLog(@"ERROR: Unknown error code: %d", result);
+                break;
+        }
+        
+        self.printer = nil;
+        return NO;
+    }
+    
+    NSLog(@"Successfully connected to printer!");
+    return YES;
+}
+
+- (void)disconnect {
+    if (self.printer) {
+        [self.printer disconnect];
+        [self.printer clearCommandBuffer];
+        self.printer = nil;
+    }
+}
+
+- (NSDictionary *)getPrinterStatus {
+    if (!self.printer) {
+        return @{};
+    }
+    
+    Epos2PrinterStatusInfo *status = [self.printer getStatus];
+    
+    return @{
+        @"isOnline": @(status.online == EPOS2_TRUE),
+        @"status": status.online == EPOS2_TRUE ? @"online" : @"offline",
+        @"errorMessage": [NSNull null],
+        @"paperStatus": @(status.paper),
+        @"drawerStatus": @(status.drawer),
+        @"batteryLevel": @(status.batteryLevel),
+        @"isCoverOpen": @(status.coverOpen == EPOS2_TRUE),
+        @"errorCode": @(status.errorStatus),
+        @"connection": @(status.connection == EPOS2_TRUE),
+        @"paperFeed": @(status.paperFeed == EPOS2_TRUE),
+        @"panelSwitch": @(status.panelSwitch)
+    };
+}
+
+- (BOOL)printWithCommands:(NSArray<NSDictionary *> *)commands {
+    NSLog(@"Starting print with %lu commands", (unsigned long)commands.count);
+    
+    if (!self.printer) {
+        NSLog(@"ERROR: No printer connected");
+        return NO;
+    }
+    
+    NSLog(@"Clearing command buffer...");
+    [self.printer clearCommandBuffer];
+    
+    for (NSDictionary *command in commands) {
+        NSString *type = command[@"type"];
+        NSLog(@"Processing command type: %@", type);
+
+        // Handle both old format (addText) and new format (text)
+        if ([type isEqualToString:@"addText"] || [type isEqualToString:@"text"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *text = parameters[@"data"];
+            if (text) {
+                NSLog(@"Adding text: %@", text);
+                [self.printer addText:text];
+            } else {
+                NSLog(@"WARNING: Text command missing data parameter");
+            }
+        } else if ([type isEqualToString:@"addTextLn"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *text = parameters[@"data"];
+            if (text) {
+                NSLog(@"Adding text with newline: %@", text);
+                [self.printer addText:text];
+                [self.printer addFeedLine:1];
+            }
+        } else if ([type isEqualToString:@"addFeedLine"] || [type isEqualToString:@"feed"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSNumber *lines = parameters[@"line"];
+            int lineCount = lines ? lines.intValue : 1;
+            NSLog(@"Adding feed lines: %d", lineCount);
+            [self.printer addFeedLine:lineCount];
+        } else if ([type isEqualToString:@"addCut"] || [type isEqualToString:@"cut"]) {
+            NSLog(@"Adding cut command");
+            [self.printer addCut:EPOS2_CUT_FEED];
+        } else if ([type isEqualToString:@"image"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *imagePath = parameters[@"imagePath"];
+            if (!imagePath || imagePath.length == 0) {
+                NSLog(@"WARNING: Image command missing imagePath");
+                continue;
+            }
+            BOOL debug = NO;
+            id debugVal = parameters[@"debug"];
+            if ([debugVal isKindOfClass:[NSNumber class]]) { debug = [debugVal boolValue]; }
+            NSString *align = parameters[@"align"] ?: @"left";
+            NSNumber *targetWidthNum = parameters[@"targetWidth"];
+            int targetWidth = targetWidthNum ? targetWidthNum.intValue : 0; // in dots/pixels
+
+            if (debug) { [self.printer addText:@"[IOS_IMG_START]\n"]; }
+            NSLog(@"IMAGE: Loading image at path: %@ (targetWidth=%d)", imagePath, targetWidth);
+
+            UIImage *image = [UIImage imageWithContentsOfFile:imagePath];
+            if (!image) {
+                NSLog(@"ERROR: Failed to load image from path: %@", imagePath);
+                if (debug) { [self.printer addText:@"[IOS_IMG_DECODE_FAILED]\n"]; }
+                continue;
+            }
+
+            // Convert to a working copy and optionally scale
+            UIImage *working = image;
+            int originalPixelWidth = (int)(image.size.width * image.scale);
+            if (targetWidth > 0 && originalPixelWidth > targetWidth) {
+                CGFloat scaleFactor = (CGFloat)targetWidth / (CGFloat)originalPixelWidth;
+                CGSize newSize = CGSizeMake(image.size.width * scaleFactor, image.size.height * scaleFactor);
+                UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0); // 1.0 so width in points == target pixel width
+                [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+                UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                if (scaled) {
+                    working = scaled;
+                    NSLog(@"IMAGE: Scaled from %dpx to %dpx", originalPixelWidth, targetWidth);
+                } else {
+                    NSLog(@"WARNING: Scaling failed, using original image");
+                }
+            }
+
+            // Alignment (affects subsequent render until changed). Keep simple as Android implementation.
+            if ([align.lowercaseString isEqualToString:@"center"]) {
+                [self.printer addTextAlign:EPOS2_ALIGN_CENTER];
+            } else if ([align.lowercaseString isEqualToString:@"right"]) {
+                [self.printer addTextAlign:EPOS2_ALIGN_RIGHT];
+            } else {
+                [self.printer addTextAlign:EPOS2_ALIGN_LEFT];
+            }
+
+            // Determine width/height in pixels for addImage
+            int finalPixelWidth = (int)(working.size.width * working.scale);
+            int finalPixelHeight = (int)(working.size.height * working.scale);
+
+            // Epson expects width/height arguments; we pass actual pixel dims.
+            int addResult = [self.printer addImage:working
+                                                x:0
+                                                y:0
+                                            width:finalPixelWidth
+                                           height:finalPixelHeight
+                                             color:EPOS2_COLOR_1
+                                              mode:EPOS2_MODE_MONO
+                                          halftone:EPOS2_HALFTONE_DITHER
+                                         brightness:1.0
+                                          compress:EPOS2_COMPRESS_AUTO];
+            NSLog(@"IMAGE: addImage result=%d", addResult);
+            if (addResult != EPOS2_SUCCESS) {
+                NSLog(@"ERROR: addImage failed with code %d", addResult);
+                if (debug) { [self.printer addText:[NSString stringWithFormat:@"[IOS_IMG_ADD_FAIL %d]\n", addResult]]; }
+            } else if (debug) {
+                [self.printer addText:@"[IOS_IMG_END]\n"]; // marker after successful add
+            }
+        } else {
+            NSLog(@"WARNING: Unknown command type: %@", type);
+        }
+    }
+    
+    NSLog(@"Sending print data to printer...");
+    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"Print result: %d (EPOS2_SUCCESS=0)", result);
+    
+    if (result == EPOS2_SUCCESS) {
+        NSLog(@"Print job sent successfully");
+        return YES;
+    } else {
+        NSLog(@"Print job failed with error code: %d", result);
+        return NO;
+    }
+}
+
+- (void)clearCommandBuffer {
+    if (self.printer) {
+        [self.printer clearCommandBuffer];
+    }
+}
+
+- (BOOL)openCashDrawer {
+    if (!self.printer) {
+        return NO;
+    }
+    
+    NSLog(@"DEBUG: openCashDrawer called");
+    // Clear any existing commands in the buffer first
+    [self.printer clearCommandBuffer];
+    
+    NSLog(@"DEBUG: Adding pulse command for cash drawer");
+    [self.printer addPulse:EPOS2_DRAWER_2PIN time:EPOS2_PULSE_100];
+    
+    NSLog(@"DEBUG: Sending cash drawer pulse...");
+    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"DEBUG: Cash drawer result: %d (EPOS2_SUCCESS=0)", result);
+    
+    return result == EPOS2_SUCCESS;
+}
+
+- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
+    NSLog(@"startBluetoothDiscoveryWithCompletion called");
+    if (!completion) { NSLog(@"ERROR: No completion handler provided for Bluetooth discovery"); return; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            int stopRet = EPOS2_SUCCESS;
+            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            [self.discoveredPrinters removeAllObjects];
+            self.discoveryCompletionHandler = completion;
+            
+            // Try BLE first, then fallback to Classic BT
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH_LE withFallback:YES];
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in startBluetoothDiscovery: %@", exception);
+            completion(@[]);
+            self.discoveryCompletionHandler = nil;
+        }
+    });
+}
+
+- (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback {
+    NSString *portTypeName = (portType == EPOS2_PORTTYPE_BLUETOOTH_LE) ? @"Bluetooth LE" : @"Classic Bluetooth";
+    NSLog(@"Trying %@ discovery...", portTypeName);
+    
+    // Create filter option for the specified Bluetooth type
+    Epos2FilterOption *bluetoothFilter = [[Epos2FilterOption alloc] init];
+    if (!bluetoothFilter) {
+        NSLog(@"ERROR: Failed to create Bluetooth filter option");
+        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
+        return;
+    }
+    [bluetoothFilter setDeviceType:EPOS2_TYPE_PRINTER];
+    [bluetoothFilter setPortType:portType];
+    
+    int32_t result = [Epos2Discovery start:bluetoothFilter delegate:self];
+    NSLog(@"%@ discovery start result: %d (EPOS2_SUCCESS=0)", portTypeName, result);
+    
+    if (result != EPOS2_SUCCESS) {
+        if (useFallback && portType == EPOS2_PORTTYPE_BLUETOOTH_LE) {
+            NSLog(@"Bluetooth LE failed, trying Classic Bluetooth...");
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+            return;
+        }
+        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
+        return;
+    }
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"%@ discovery timeout reached, stopping discovery...", portTypeName);
+        int sret = EPOS2_SUCCESS;
+        do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+        NSUInteger count = self.discoveredPrinters.count;
+        if (count > 0 || !useFallback || portType == EPOS2_PORTTYPE_BLUETOOTH) {
+            if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler([self.discoveredPrinters copy]); self.discoveryCompletionHandler = nil; }
+        } else {
+            NSLog(@"No printers found with Bluetooth LE, trying Classic Bluetooth...");
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+        }
+    });
+}
+
+- (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
+    NSLog(@"findPairedBluetoothPrintersWithCompletion called - looking for already paired devices");
+    
+    if (!completion) {
+        NSLog(@"ERROR: No completion handler provided for paired Bluetooth discovery");
+        return;
+    }
+    
+    // Ensure Epson discovery start/stop runs on the main thread (Epson SDK expects main thread)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            // Stop any existing discovery first
+            [Epos2Discovery stop];
+            
+            [self.discoveredPrinters removeAllObjects];
+            __block BOOL discoveryCompleted = NO;
+            
+            // Store completion handler
+            void (^savedCompletion)(NSArray<NSDictionary *> *) = [completion copy];
+            
+            // Set up discovery completion
+            self.discoveryCompletionHandler = ^(NSArray<NSDictionary *> *printers) {
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    NSLog(@"Paired Bluetooth discovery completed with %lu devices", (unsigned long)printers.count);
+                    savedCompletion(printers);
+                }
+            };
+            
+            // Try BLE discovery first (for paired devices, this should find BD addresses)
+            NSLog(@"Starting paired device discovery with BLE (main thread)...");
+            
+            Epos2FilterOption *bleFilter = [[Epos2FilterOption alloc] init];
+            [bleFilter setPortType:EPOS2_PORTTYPE_BLUETOOTH_LE];
+            
+            int32_t result = [Epos2Discovery start:bleFilter delegate:self];
+            NSLog(@"Paired BLE discovery result: %d", result);
+            
+            if (result != EPOS2_SUCCESS) {
+                // Try classic Bluetooth if BLE fails
+                NSLog(@"BLE discovery failed, trying classic Bluetooth for paired devices (main thread)...");
+                
+                Epos2FilterOption *btFilter = [[Epos2FilterOption alloc] init];
+                [btFilter setPortType:EPOS2_PORTTYPE_BLUETOOTH];
+                
+                result = [Epos2Discovery start:btFilter delegate:self];
+                NSLog(@"Paired BT discovery result: %d", result);
+            }
+            
+            if (result != EPOS2_SUCCESS) {
+                NSLog(@"Both BLE and BT discovery failed for paired devices");
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    savedCompletion(@[]);
+                }
+                return;
+            }
+            
+            // Set timeout for paired device discovery
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSLog(@"Paired device discovery timeout reached");
+                [Epos2Discovery stop];
+                
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    NSLog(@"Found %lu paired devices", (unsigned long)self.discoveredPrinters.count);
+                    savedCompletion([self.discoveredPrinters copy]);
+                }
+            });
+            
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in findPairedBluetoothPrinters: %@", exception);
+            completion(@[]);
+        }
+    });
+}
+
+- (void)pairBluetoothDeviceWithCompletion:(void (^)(NSString * _Nullable target, int result))completion {
+    NSLog(@"pairBluetoothDeviceWithCompletion called");
+    if (!completion) { return; }
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @try {
+            Epos2BluetoothConnection *bt = [[Epos2BluetoothConnection alloc] init];
+            if (!bt) {
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, EPOS2_BT_ERR_FAILURE); });
+                return;
+            }
+            NSMutableString *mac = [NSMutableString string];
+            int ret = [bt connectDevice:mac];
+            NSLog(@"connectDevice returned: %d, mac: %@", ret, mac);
+            if (ret == EPOS2_BT_SUCCESS || ret == EPOS2_BT_ERR_ALREADY_CONNECT) {
+                NSString *macStr = [mac copy];
+                // If SDK already returns a scheme (BT:/BLE:), use it as-is. Otherwise, prefix with BT:
+                NSString *upper = [macStr uppercaseString];
+                BOOL hasScheme = [upper hasPrefix:@"BT:"] || [upper hasPrefix:@"BLE:"] || [upper hasPrefix:@"TCP:"] || [upper hasPrefix:@"TCPS:"] || [upper hasPrefix:@"USB:"];
+                NSString *target = hasScheme ? macStr : [NSString stringWithFormat:@"BT:%@", macStr];
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(target, ret); });
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, ret); });
+            }
+        } @catch (NSException *ex) {
+            NSLog(@"Exception in pairBluetoothDeviceWithCompletion: %@", ex);
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, EPOS2_BT_ERR_FAILURE); });
+        }
+    });
+}
+
+#pragma mark - Epos2DiscoveryDelegate
+
+- (void)onDiscovery:(Epos2DeviceInfo *)deviceInfo {
+    NSLog(@"Discovery found device: %@ (target: %@, IP: %@)", deviceInfo.deviceName, deviceInfo.target, deviceInfo.ipAddress);
+    
+    NSDictionary *printerInfo = @{
+        @"target": deviceInfo.target ?: @"",
+        @"deviceName": deviceInfo.deviceName ?: @"",
+        @"deviceType": @(deviceInfo.deviceType),
+        @"ipAddress": deviceInfo.ipAddress ?: @"",
+        @"macAddress": deviceInfo.macAddress ?: @"",
+    };
+    
+    [self.discoveredPrinters addObject:printerInfo];
+}
+
+- (void)onComplete {
+    NSLog(@"Discovery completed. Found %lu printers", (unsigned long)self.discoveredPrinters.count);
+    
+    // Don't call completion here, let the timer handle it
+    // The onComplete can be called before all devices are found
+}
+
+#pragma mark - Epos2PtrReceiveDelegate
+
+- (void)onPtrReceive:(Epos2Printer *)printerObj code:(int32_t)code status:(Epos2PrinterStatusInfo *)status printJobId:(NSString *)printJobId {
+    NSLog(@"Print job completed with code: %d", code);
+}
+
+@end

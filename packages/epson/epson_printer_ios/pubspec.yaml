@@ -1,0 +1,19 @@
+name: epson_printer_ios
+description: iOS implementation of the epson_printer plugin.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+flutter:
+  plugin:
+    implements: epson_printer
+    platforms:
+      ios:
+        pluginClass: EpsonPrinterIosPlugin
+
+dependencies:
+  flutter:
+    sdk: flutter

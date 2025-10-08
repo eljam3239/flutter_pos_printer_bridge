@@ -1,0 +1,24 @@
+name: epson_printer_android
+description: Android implementation for Epson printer plugin (work in progress)
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  plugin_platform_interface: ^2.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.example.epson_printer_android
+        pluginClass: EpsonPrinterAndroidPlugin

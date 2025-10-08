@@ -1,0 +1,6 @@
+framework module ePOS2 {
+  umbrella header "ePOS2.h"
+  
+  export *
+  module * { export * }
+}

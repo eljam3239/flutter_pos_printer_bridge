@@ -35,6 +35,16 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # Permission handling
+  permission_handler: ^11.3.1
+
+  # Image picking for POS logo
+  image_picker: ^1.1.2
+
+  # Epson printer plugin
+  epson_printer:
+    path: packages/epson/epson_printer
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
