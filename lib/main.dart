@@ -461,37 +461,16 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _printEpsonReceipt() async {
-    // Attempt to build structured commands from layout inputs.
-    final structured = _buildEpsonReceiptCommandsFromLayout();
-
-    // If all fields empty, we fall back automatically. Otherwise, ensure structured has content.
-    final anyFieldNotEmpty = _headerController.text.trim().isNotEmpty ||
-        _detailsController.text.trim().isNotEmpty ||
-        _itemsController.text.trim().isNotEmpty ||
-        _footerController.text.trim().isNotEmpty;
+    // Use POS style receipt building (like epsonmain.dart)
+    final commands = _buildEpsonPosReceiptCommands();
     
-    if (anyFieldNotEmpty && structured.isEmpty) {
+    if (commands.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nothing to print: please add header, details, items, or footer data.')),
+        const SnackBar(content: Text('POS receipt has no content.')),
       );
       return;
     }
-
-    final commands = structured.isNotEmpty
-        ? structured
-        : [
-            // Fallback legacy demo content if no structured input provided.
-            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'EPSON PRINTER TEST\n'}),
-            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
-            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
-            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Test Receipt\n'}),
-            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Legacy Demo Mode\n'}),
-            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
-            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
-            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
-            EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
-          ];
 
     final printJob = EpsonPrintJob(commands: commands);
     await EpsonPrinter.printReceipt(printJob);
@@ -504,7 +483,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_openDrawerAfterPrint ? 'Epson print job sent and drawer opened' : 'Epson print job sent successfully')),
+      SnackBar(content: Text(_openDrawerAfterPrint ? 'Epson POS receipt sent and drawer opened' : 'Epson POS receipt sent successfully')),
     );
   }
 
@@ -530,14 +509,11 @@ class _MyHomePageState extends State<MyHomePage> {
           'lane': _lane,
           'footer': _footer,
         },
-        'items': [
-          {
-            'quantity': _itemQuantity,
-            'name': _itemName,
-            'price': _itemPrice,
-            'repeat': _itemRepeat,
-          }
-        ],
+        'items': List.generate(_itemRepeat, (index) => {
+          'quantity': _itemQuantity,
+          'name': _itemName,
+          'price': _itemPrice,
+        }),
         'image': _logoBase64 == null
             ? null
             : {
@@ -581,71 +557,138 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  // Build EpsonPrintCommand list from current layout controller contents.
-  // This is intentionally conservative: relies only on 'text', 'feed', 'cut' for broad compatibility.
-  List<EpsonPrintCommand> _buildEpsonReceiptCommandsFromLayout() {
+  // Build EpsonPrintCommand list for POS style receipt (from epsonmain.dart)
+  List<EpsonPrintCommand> _buildEpsonPosReceiptCommands() {
     final List<EpsonPrintCommand> cmds = [];
 
-    String header = _headerController.text.trim();
-    String details = _detailsController.text.trim();
-    String items = _itemsController.text.trim();
-    String footer = _footerController.text.trim();
-
-    bool hasAny = header.isNotEmpty || details.isNotEmpty || items.isNotEmpty || footer.isNotEmpty;
-    if (!hasAny) {
-      return [];
+    int _estimatePrinterDots() {
+      // Rough heuristic mapping from characters-per-line to dot width.
+      if (_posCharsPerLine <= 32) return 384;   // 58mm common
+      if (_posCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
+      if (_posCharsPerLine <= 48) return 576;   // 80mm Font A
+      if (_posCharsPerLine <= 56) return 640;   // Some 3" models
+      if (_posCharsPerLine <= 64) return 832;   // 80mm Font B / high density
+      return 576; // fallback
     }
+    final printerWidthDots = _estimatePrinterDots();
 
-    void addTextBlock(String block) {
-      if (block.isEmpty) return;
-      // Ensure newline termination for printer line flush.
-      if (!block.endsWith('\n')) block = '$block\n';
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': block }));
-    }
-
-    // Header block (may contain internal newlines)
-    if (header.isNotEmpty) {
-      addTextBlock(header);
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
-    }
-
-    // Placeholder for logo image if provided
-    if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
-      // For now just add a marker line so user knows image would print here.
-      addTextBlock('[LOGO]\n');
-    }
-
-    // Details: treat each non-empty line individually
-    if (details.isNotEmpty) {
-      final lines = details.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-      for (int i = 0; i < lines.length; i++) {
-        addTextBlock(lines[i]);
+    String title = _headerTitle.trim();
+    if (title.isNotEmpty) {
+      // Make header larger by adding spacing and emphasis
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('$title') + '\n' }));
+      if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
+        // Persist logo to temp file for native side
+        try {
+          final bytes = base64Decode(_logoBase64!);
+          // NOTE: Synchronous write acceptable for small logo; could be pre-written earlier.
+          final tmpDir = Directory.systemTemp;
+          final file = File('${tmpDir.path}/epson_logo_${DateTime.now().millisecondsSinceEpoch}.png');
+          file.writeAsBytesSync(bytes, flush: true);
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.image, parameters: {
+            'imagePath': file.path,
+            'printerWidth': printerWidthDots,
+            'targetWidth': _imageWidthPx, // allow native scaling
+            'align': 'center',
+            'advancedProcessing': false,
+          }));
+          if (_imageSpacingLines > 0) {
+            cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _imageSpacingLines }));
+          }
+        } catch (_) {
+          // Fallback marker if file write fails
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO ERR]') + '\n' }));
+        }
       }
-      // Gap after details block
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
-    }
-
-    // Items: raw lines for now (future parsing for qty/price alignment)
-    if (items.isNotEmpty) {
-      final itemLines = items.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-      for (int i = 0; i < itemLines.length; i++) {
-        addTextBlock(itemLines[i]);
+      if (_headerSpacingLines > 0) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerSpacingLines }));
       }
-      // Add a separating feed after items
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
     }
 
-    // Footer
-    if (footer.isNotEmpty) {
-      addTextBlock(footer);
+    if (_locationText.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(_locationText.trim()) + '\n' }));
     }
 
-    // Final feeds + cut
+    // Centered 'Receipt'
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + _center('Receipt') + '\n' }));
+
+    // Date Time (left) vs Cashier (right)
+    final dateTime = '${_date.trim()} ${_time.trim()}';
+    final cashierStr = 'Cashier: ${_cashier.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(dateTime, cashierStr) + '\n' }));
+
+    // Receipt # vs Lane
+    final recLine = 'Receipt: ${_receiptNum.trim()}';
+    final laneLine = 'Lane: ${_lane.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(recLine, laneLine) + '\n' }));
+
+    // Blank line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+
+    // Horizontal line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+
+    // Items repeated
+    final repeatCount = _itemRepeat;
+    for (int i = 0; i < repeatCount; i++) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+    }
+
+    // Second horizontal line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+
+    if (_footer.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(_footer.trim()) + '\n' }));
+    }
+
+    // End feeds + cut
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
-
     return cmds;
   }
+
+  // ===================== POS Receipt Formatting Helpers =====================
+  String _center(String text) {
+    text = text.trim();
+    if (text.isEmpty) return '';
+    if (text.length >= _posCharsPerLine) return text;
+    final totalPad = _posCharsPerLine - text.length;
+    final left = (totalPad / 2).floor();
+    final right = totalPad - left;
+    return ' ' * left + text + ' ' * right;
+  }
+
+  String _horizontalLine() => '-' * _posCharsPerLine;
+
+  String _leftRight(String left, String right) {
+    left = left.trim();
+    right = right.trim();
+    final space = _posCharsPerLine - left.length - right.length;
+    if (space < 1) {
+      final maxLeft = _posCharsPerLine - right.length - 1;
+      if (maxLeft < 1) return (left + right).substring(0, _posCharsPerLine);
+      left = left.substring(0, maxLeft);
+      return '$left ${right}';
+    }
+    return left + ' ' * space + right;
+  }
+
+  String _qtyNamePrice(String qty, String name, String price) {
+    // Layout: qty with 'x' (4 chars) name (left) price (right) within paper width.
+    qty = qty.trim();
+    name = name.trim();
+    price = price.trim();
+    const qtyWidth = 4; // e.g. '99x '
+    const priceWidth = 8; // enough for large price
+    final qtyStr = qty.length > 2 ? qty.substring(0, 2) : qty;
+    final qtyField = '${qtyStr} x'.padRight(qtyWidth);
+    // Remaining width for name = total - qtyWidth - priceWidth
+    final nameWidth = _posCharsPerLine - qtyWidth - priceWidth;
+    String nameTrunc = name;
+    if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
+    final priceField = price.padLeft(priceWidth);
+    return qtyField + nameTrunc.padRight(nameWidth) + priceField;
+  }
+  // ==========================================================================
 
   Future<void> _disconnectFromPrinter() async {
     try {
@@ -800,9 +843,9 @@ class _MyHomePageState extends State<MyHomePage> {
             _buildConnectionCard(),
             const SizedBox(height: 16),
             
-            // Receipt Layout Card
-            _buildReceiptLayoutCard(),
-            const SizedBox(height: 16),
+            // Receipt Layout Card - Commented out as we now use POS style for both brands
+            // _buildReceiptLayoutCard(),
+            // const SizedBox(height: 16),
             
             // POS Style Receipt Card
             _buildPosReceiptCard(),
@@ -1024,93 +1067,94 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  Widget _buildReceiptLayoutCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.receipt_long, color: Theme.of(context).primaryColor),
-                const SizedBox(width: 8),
-                Text('Receipt Layout', style: Theme.of(context).textTheme.headlineSmall),
-              ],
-            ),
-            const SizedBox(height: 16),
-            
-            TextField(
-              controller: _headerController,
-              decoration: const InputDecoration(
-                labelText: 'Header',
-                border: OutlineInputBorder(),
-                helperText: 'Store name, address, etc.',
-              ),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 12),
-            
-            TextField(
-              controller: _detailsController,
-              decoration: const InputDecoration(
-                labelText: 'Details',
-                border: OutlineInputBorder(),
-                helperText: 'Order number, date, etc.',
-              ),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 12),
-            
-            TextField(
-              controller: _itemsController,
-              decoration: const InputDecoration(
-                labelText: 'Items',
-                border: OutlineInputBorder(),
-                helperText: 'Line items (e.g., "2x Coffee @3.50")',
-              ),
-              maxLines: 5,
-            ),
-            const SizedBox(height: 12),
-            
-            TextField(
-              controller: _footerController,
-              decoration: const InputDecoration(
-                labelText: 'Footer',
-                border: OutlineInputBorder(),
-                helperText: 'Thank you message, etc.',
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 16),
-            
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _pickLogoImage,
-                    icon: const Icon(Icons.image),
-                    label: const Text('Pick Logo'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (_logoBase64 != null)
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Icon(Icons.check, color: Colors.green),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // Receipt Layout Card method - Commented out as we now use POS style for both brands
+  // Widget _buildReceiptLayoutCard() {
+  //   return Card(
+  //     child: Padding(
+  //       padding: const EdgeInsets.all(16.0),
+  //       child: Column(
+  //         crossAxisAlignment: CrossAxisAlignment.start,
+  //         children: [
+  //           Row(
+  //             children: [
+  //               Icon(Icons.receipt_long, color: Theme.of(context).primaryColor),
+  //               const SizedBox(width: 8),
+  //               Text('Receipt Layout', style: Theme.of(context).textTheme.headlineSmall),
+  //             ],
+  //           ),
+  //           const SizedBox(height: 16),
+  //           
+  //           TextField(
+  //             controller: _headerController,
+  //             decoration: const InputDecoration(
+  //               labelText: 'Header',
+  //               border: OutlineInputBorder(),
+  //               helperText: 'Store name, address, etc.',
+  //             ),
+  //             maxLines: 3,
+  //           ),
+  //           const SizedBox(height: 12),
+  //           
+  //           TextField(
+  //             controller: _detailsController,
+  //             decoration: const InputDecoration(
+  //               labelText: 'Details',
+  //               border: OutlineInputBorder(),
+  //               helperText: 'Order number, date, etc.',
+  //             ),
+  //             maxLines: 3,
+  //           ),
+  //           const SizedBox(height: 12),
+  //           
+  //           TextField(
+  //             controller: _itemsController,
+  //             decoration: const InputDecoration(
+  //               labelText: 'Items',
+  //               border: OutlineInputBorder(),
+  //               helperText: 'Line items (e.g., "2x Coffee @3.50")',
+  //             ),
+  //             maxLines: 5,
+  //           ),
+  //           const SizedBox(height: 12),
+  //           
+  //           TextField(
+  //             controller: _footerController,
+  //             decoration: const InputDecoration(
+  //               labelText: 'Footer',
+  //               border: OutlineInputBorder(),
+  //               helperText: 'Thank you message, etc.',
+  //             ),
+  //             maxLines: 2,
+  //           ),
+  //           const SizedBox(height: 16),
+  //           
+  //           Row(
+  //             children: [
+  //               Expanded(
+  //                 child: ElevatedButton.icon(
+  //                   onPressed: _pickLogoImage,
+  //                   icon: const Icon(Icons.image),
+  //                   label: const Text('Pick Logo'),
+  //                 ),
+  //               ),
+  //               const SizedBox(width: 8),
+  //               if (_logoBase64 != null)
+  //                 Container(
+  //                   width: 40,
+  //                   height: 40,
+  //                   decoration: BoxDecoration(
+  //                     border: Border.all(color: Colors.grey),
+  //                     borderRadius: BorderRadius.circular(4),
+  //                   ),
+  //                   child: const Icon(Icons.check, color: Colors.green),
+  //                 ),
+  //             ],
+  //           ),
+  //         ],
+  //       ),
+  //     ),
+  //   );
+  // }
 
   Widget _buildPosReceiptCard() {
     return Card(
@@ -1281,6 +1325,34 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               controller: TextEditingController(text: _footer),
               onChanged: (value) => _footer = value,
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // Logo Image section
+            Text('Receipt Logo', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _pickLogoImage,
+                    icon: const Icon(Icons.image),
+                    label: const Text('Pick Logo Image'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (_logoBase64 != null)
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Icon(Icons.check, color: Colors.green),
+                  ),
+              ],
             ),
             
             const SizedBox(height: 16),
