@@ -147,13 +147,19 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
+    // Clear previous discovery results and reset state
+    setState(() {
+      _discoveredPrinters = <String>[];
+      _selectedPrinter = null;
+    });
+
     try {
       switch (_selectedBrand!) {
         case PrinterBrand.epson:
           try {
             final printers = await EpsonPrinter.discoverPrinters();
             setState(() {
-              _discoveredPrinters = printers;
+              _discoveredPrinters = List<String>.from(printers); // Create growable list
               if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
                 _selectedPrinter = printers.isNotEmpty ? printers.first : null;
               }
@@ -205,7 +211,7 @@ class _MyHomePageState extends State<MyHomePage> {
             final printers = await StarPrinter.discoverPrinters();
             print('DEBUG: Discovery result: $printers');
             setState(() {
-              _discoveredPrinters = printers;
+              _discoveredPrinters = List<String>.from(printers); // Create growable list
               // Auto-select first printer if none selected or if current selection is no longer available
               if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
                 _selectedPrinter = printers.isNotEmpty ? printers.first : null;
@@ -884,23 +890,32 @@ class _MyHomePageState extends State<MyHomePage> {
                 );
               }).toList(),
               onChanged: (PrinterBrand? newValue) async {
-                // If currently connected, disconnect first
-                if (_isConnected && _selectedBrand != null) {
+                if (newValue == _selectedBrand) return; // No change
+                
+                // If currently connected, disconnect first regardless of brand
+                if (_isConnected) {
                   try {
+                    print('DEBUG: Disconnecting from current printer before brand switch...');
                     await _disconnectFromPrinter();
+                    print('DEBUG: Successfully disconnected from current printer');
+                    // Add a small delay to ensure disconnect completes
+                    await Future.delayed(const Duration(milliseconds: 500));
                   } catch (e) {
                     print('DEBUG: Failed to disconnect when switching brands: $e');
+                    // Continue with brand switch even if disconnect fails
                   }
                 }
                 
                 setState(() {
                   _selectedBrand = newValue;
-                  // Reset printer state when brand changes
-                  _discoveredPrinters.clear();
+                  // Reset ALL printer state when brand changes
+                  _discoveredPrinters = <String>[]; // Create new empty growable list
                   _selectedPrinter = null;
                   _isConnected = false;
                   _printerStatus = 'Unknown';
                 });
+                
+                print('DEBUG: Brand switched to ${newValue?.displayName ?? "None"}. State reset complete.');
               },
             ),
             if (_selectedBrand != null) ...[
