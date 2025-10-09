@@ -61,6 +61,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _detailsController = TextEditingController();
   final TextEditingController _itemsController = TextEditingController();
   final TextEditingController _footerController = TextEditingController();
+  final TextEditingController _logoBase64Controller = TextEditingController();
   
   // POS style receipt fields (inspired by both implementations)
   String _headerTitle = "My Store";
@@ -81,6 +82,12 @@ class _MyHomePageState extends State<MyHomePage> {
   // Receipt layout settings
   int _posCharsPerLine = 48; // 80mm paper common width
   String? _logoBase64;
+  
+  // Additional fields from Star implementation
+  int _headerFontSize = 32;
+  int _headerSpacingLines = 1;
+  int _imageWidthPx = 200;
+  int _imageSpacingLines = 1;
 
   @override
   void initState() {
@@ -102,6 +109,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _detailsController.dispose();
     _itemsController.dispose();
     _footerController.dispose();
+    _logoBase64Controller.dispose();
     super.dispose();
   }
 
@@ -140,12 +148,8 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // TODO: Wire to actual printer discovery based on _selectedBrand
-      // For now, show placeholder printers
-      final List<String> placeholderPrinters;
       switch (_selectedBrand!) {
         case PrinterBrand.epson:
-          placeholderPrinters = ['BT:00:11:22:33:44:55:TM-T88VI', 'TCP:192.168.1.100:TM-T20III'];
           try {
             final printers = await EpsonPrinter.discoverPrinters();
             setState(() {
@@ -166,7 +170,6 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           break;
         case PrinterBrand.star:
-          placeholderPrinters = ['LAN:10.20.30.125:TSP100', 'BT:AA:BB:CC:DD:EE:FF:mPOP'];
           try {
             print('DEBUG: Starting printer discovery...');
             
@@ -227,23 +230,18 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           break;
         case PrinterBrand.zebra:
-          placeholderPrinters = ['BT:ZQ520', 'USB:ZD410'];
+          // TODO: Implement Zebra discovery when available
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Zebra printer discovery not yet implemented')),
+          );
           break;
       }
-      
-      // setState(() {
-      //   _discoveredPrinters = placeholderPrinters;
-      //   _selectedPrinter = placeholderPrinters.isNotEmpty ? placeholderPrinters.first : null;
-      // });
-
-    //   if (!mounted) return;
-    //   ScaffoldMessenger.of(context).showSnackBar(
-    //     SnackBar(content: Text('Found ${placeholderPrinters.length} ${_selectedBrand!.displayName} printers')),
-    //   );
-    // 
-    } 
-    catch (e) {
-      return;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Discovery failed: $e')),
+      );
     }
   }
 
@@ -439,23 +437,214 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // TODO: Wire to actual print job based on _selectedBrand
-      // This would build the appropriate commands for the selected printer brand
-      
-      if (_openDrawerAfterPrint && _isConnected) {
-        // TODO: Wire cash drawer opening
+      switch (_selectedBrand!) {
+        case PrinterBrand.epson:
+          await _printEpsonReceipt();
+          break;
+        case PrinterBrand.star:
+          await _printStarReceipt();
+          break;
+        case PrinterBrand.zebra:
+          // TODO: Implement Zebra printing when available
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Zebra printer printing not yet implemented')),
+          );
+          break;
       }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Print job sent via ${_selectedBrand!.displayName}')),
-      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Print failed: $e')),
       );
     }
+  }
+
+  Future<void> _printEpsonReceipt() async {
+    // Attempt to build structured commands from layout inputs.
+    final structured = _buildEpsonReceiptCommandsFromLayout();
+
+    // If all fields empty, we fall back automatically. Otherwise, ensure structured has content.
+    final anyFieldNotEmpty = _headerController.text.trim().isNotEmpty ||
+        _detailsController.text.trim().isNotEmpty ||
+        _itemsController.text.trim().isNotEmpty ||
+        _footerController.text.trim().isNotEmpty;
+    
+    if (anyFieldNotEmpty && structured.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to print: please add header, details, items, or footer data.')),
+      );
+      return;
+    }
+
+    final commands = structured.isNotEmpty
+        ? structured
+        : [
+            // Fallback legacy demo content if no structured input provided.
+            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'EPSON PRINTER TEST\n'}),
+            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
+            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Test Receipt\n'}),
+            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Legacy Demo Mode\n'}),
+            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
+            EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
+            EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+            EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
+          ];
+
+    final printJob = EpsonPrintJob(commands: commands);
+    await EpsonPrinter.printReceipt(printJob);
+
+    if (_openDrawerAfterPrint && _isConnected) {
+      try {
+        await EpsonPrinter.openCashDrawer();
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_openDrawerAfterPrint ? 'Epson print job sent and drawer opened' : 'Epson print job sent successfully')),
+    );
+  }
+
+  Future<void> _printStarReceipt() async {
+    print('DEBUG: Print receipt button pressed');
+    
+    print('DEBUG: Creating print job...');
+    // Build structured layout settings to be interpreted by native layers
+    final layoutSettings = {
+      'layout': {
+        'header': {
+          'title': _headerTitle,
+          'align': 'center',
+          'fontSize': _headerFontSize,
+          'spacingLines': _headerSpacingLines,
+        },
+        'details': {
+          'locationText': _locationText,
+          'date': _date,
+          'time': _time,
+          'cashier': _cashier,
+          'receiptNum': _receiptNum,
+          'lane': _lane,
+          'footer': _footer,
+        },
+        'items': [
+          {
+            'quantity': _itemQuantity,
+            'name': _itemName,
+            'price': _itemPrice,
+            'repeat': _itemRepeat,
+          }
+        ],
+        'image': _logoBase64 == null
+            ? null
+            : {
+                'base64': _logoBase64,
+                'mime': 'image/png',
+                'align': 'center',
+                'width': _imageWidthPx,
+                'spacingLines': _imageSpacingLines,
+              },
+      },
+    };
+
+    final printJob = PrintJob(
+      content: '',
+      settings: layoutSettings,
+    );
+    
+    print('DEBUG: Sending print job to printer...');
+    await StarPrinter.printReceipt(printJob);
+    
+    print('DEBUG: Print job completed successfully');
+    
+    // Optionally open cash drawer after successful print
+    if (_openDrawerAfterPrint && _isConnected) {
+      try {
+        print('DEBUG: Auto-opening cash drawer after print...');
+        await StarPrinter.openCashDrawer();
+        print('DEBUG: Auto cash drawer opened successfully');
+      } catch (drawerError) {
+        print('DEBUG: Auto cash drawer failed: $drawerError');
+        // Don't fail the whole operation if drawer fails
+      }
+    }
+    
+    print('DEBUG: Print job completed successfully');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_openDrawerAfterPrint 
+          ? 'Star print job sent and drawer opened' 
+          : 'Star print job sent successfully')),
+    );
+  }
+
+  // Build EpsonPrintCommand list from current layout controller contents.
+  // This is intentionally conservative: relies only on 'text', 'feed', 'cut' for broad compatibility.
+  List<EpsonPrintCommand> _buildEpsonReceiptCommandsFromLayout() {
+    final List<EpsonPrintCommand> cmds = [];
+
+    String header = _headerController.text.trim();
+    String details = _detailsController.text.trim();
+    String items = _itemsController.text.trim();
+    String footer = _footerController.text.trim();
+
+    bool hasAny = header.isNotEmpty || details.isNotEmpty || items.isNotEmpty || footer.isNotEmpty;
+    if (!hasAny) {
+      return [];
+    }
+
+    void addTextBlock(String block) {
+      if (block.isEmpty) return;
+      // Ensure newline termination for printer line flush.
+      if (!block.endsWith('\n')) block = '$block\n';
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': block }));
+    }
+
+    // Header block (may contain internal newlines)
+    if (header.isNotEmpty) {
+      addTextBlock(header);
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+    }
+
+    // Placeholder for logo image if provided
+    if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
+      // For now just add a marker line so user knows image would print here.
+      addTextBlock('[LOGO]\n');
+    }
+
+    // Details: treat each non-empty line individually
+    if (details.isNotEmpty) {
+      final lines = details.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      for (int i = 0; i < lines.length; i++) {
+        addTextBlock(lines[i]);
+      }
+      // Gap after details block
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+    }
+
+    // Items: raw lines for now (future parsing for qty/price alignment)
+    if (items.isNotEmpty) {
+      final itemLines = items.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      for (int i = 0; i < itemLines.length; i++) {
+        addTextBlock(itemLines[i]);
+      }
+      // Add a separating feed after items
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+    }
+
+    // Footer
+    if (footer.isNotEmpty) {
+      addTextBlock(footer);
+    }
+
+    // Final feeds + cut
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+
+    return cmds;
   }
 
   Future<void> _disconnectFromPrinter() async {
@@ -496,10 +685,26 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // TODO: Wire to actual status check based on _selectedBrand
-      setState(() {
-        _printerStatus = 'Online: true, Status: Ready';
-      });
+      switch (_selectedBrand!) {
+        case PrinterBrand.epson:
+          final status = await EpsonPrinter.getStatus();
+          setState(() {
+            _printerStatus = 'Online: ${status.isOnline}, Status: ${status.status}';
+          });
+          break;
+        case PrinterBrand.star:
+          final status = await StarPrinter.getStatus();
+          setState(() {
+            _printerStatus = 'Online: ${status.isOnline}, Status: ${status.status}';
+          });
+          break;
+        case PrinterBrand.zebra:
+          // TODO: Implement Zebra status when available
+          setState(() {
+            _printerStatus = 'Zebra status not yet implemented';
+          });
+          break;
+      }
     } catch (e) {
       setState(() {
         _printerStatus = 'Error: $e';
@@ -522,7 +727,24 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // TODO: Wire to actual cash drawer command based on _selectedBrand
+      switch (_selectedBrand!) {
+        case PrinterBrand.epson:
+          await EpsonPrinter.openCashDrawer();
+          break;
+        case PrinterBrand.star:
+          print('DEBUG: Opening cash drawer...');
+          await StarPrinter.openCashDrawer();
+          print('DEBUG: Cash drawer command sent successfully');
+          break;
+        case PrinterBrand.zebra:
+          // TODO: Implement Zebra cash drawer when available
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Zebra cash drawer not yet implemented')),
+          );
+          return;
+      }
+      
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cash drawer opened')),
