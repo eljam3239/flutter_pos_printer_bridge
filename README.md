@@ -32,6 +32,11 @@ Epson
 | iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
 | Android     |  LAN, Bluetooth (pre-connected), usb   | yes |
 
+Exceptions (also seen in Epson TM Utility App)
++ After connecting the TM-m30III to an iPad over USB, all future Blueooth discovery is blocked until the app is restarted and the iPad is reconnected to that printer over Bluetooth from the iPad's settings app. This mimics the TM utility behaviour when trying to detect the bluetooth interface of the printer after connecting to that printer over USB. My hypothesis is that if an iPad is connected to the TM-m30III over Bluetooth, then a cable is detected in the iPad's port, the radio receiver in the printer turns off. No future Bluetooth connection attempts succeed from an iPad once it has been plugged into the printer via USB, and that is seen in the TM Utility app too. As such, post USB connection, printer discovery only searches for LAN and USB interfaces on iOS.
++ Connecting to the TM-m30III from an Android tablet over Bluetooth can only be done once the USB cable is removed (in the context of trying to switch back and fourth between USB and Bluetooth connections from the Android tablet.)
++ I noticed that if I discover/connect/print to Epson printers, change to Star, discover/connect/print to a star printer, then switch back to Epson, I don't see the LAN interfaces from Epson discovery I would expect to. Switching to Star, then back to Epson, then reattempting printer discovery fixed this issue. I haven't reproduced this bug, so its likely do to bad wifi reception at the time of attempted LAN discovery. 
+
 Zebra (in progress)
 
 | Device | |
