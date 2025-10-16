@@ -28,6 +28,12 @@ class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
   }
 
   @override
+  Future<List<String>> discoverAllPrinters() async {
+    final List<dynamic> result = await methodChannel.invokeMethod('discoverAllPrinters');
+    return result.cast<String>();
+  }
+
+  @override
   Future<List<String>> findPairedBluetoothPrinters() async {
     final List<dynamic> result = await methodChannel.invokeMethod('findPairedBluetoothPrinters');
     return result.cast<String>();
@@ -75,5 +81,16 @@ class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
   Future<bool> isConnected() async {
     final result = await methodChannel.invokeMethod<bool>('isConnected');
     return result ?? false;
+  }
+
+  @override
+  Future<Map<String, dynamic>> getDiscoveryState() async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>('getDiscoveryState');
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  @override
+  Future<void> abortDiscovery() async {
+    await methodChannel.invokeMethod<void>('abortDiscovery');
   }
 }

@@ -3,6 +3,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 
 import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart';
@@ -55,6 +56,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String _printerStatus = 'Unknown';
   String? _selectedPrinter;
   bool _openDrawerAfterPrint = true;
+  bool _isDiscovering = false; // Epson: prevent concurrent discoveries
+  bool _usbWasConnectedThisSession = false; // iOS: track USB use disabling BT on device
+  String _nativeDiscoveryState = 'idle'; // Epson native discovery state
+  Timer? _statePollTimer; // iOS discovery state polling timer
   
   // Receipt content controllers
   final TextEditingController _headerController = TextEditingController();
@@ -94,6 +99,10 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
     _initializeControllers();
     _checkAndRequestPermissions();
+    // Epson iOS: poll native discovery state to keep _nativeDiscoveryState fresh
+    if (Platform.isIOS) {
+      _startDiscoveryStatePolling();
+    }
   }
 
   void _initializeControllers() {
@@ -110,7 +119,32 @@ class _MyHomePageState extends State<MyHomePage> {
     _itemsController.dispose();
     _footerController.dispose();
     _logoBase64Controller.dispose();
+    _statePollTimer?.cancel();
     super.dispose();
+  }
+
+  // Poll Epson native discovery state on iOS for better orchestration feedback
+  void _startDiscoveryStatePolling() {
+    _statePollTimer?.cancel();
+    _statePollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      try {
+        final state = await EpsonPrinter.getDiscoveryState();
+        final nativeState = (state['state'] as String?) ?? 'unknown';
+        final usbFlag = state['usbWasConnectedThisSession'] == true;
+        if (!mounted) return;
+        setState(() {
+          _nativeDiscoveryState = nativeState;
+          // Once USB flagged true this session, keep it true on iOS
+          if (Platform.isIOS && (usbFlag || _usbWasConnectedThisSession)) {
+            _usbWasConnectedThisSession = true;
+          } else {
+            _usbWasConnectedThisSession = usbFlag;
+          }
+        });
+      } catch (_) {
+        // ignore polling errors
+      }
+    });
   }
 
   Future<void> _checkAndRequestPermissions() async {
@@ -147,6 +181,15 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
+    // Enforce Epson rule: do not run discovery while connected
+    if (_selectedBrand == PrinterBrand.epson && _isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Disconnect from Epson printer before discovering new devices')),
+      );
+      return;
+    }
+
     // Clear previous discovery results and reset state
     setState(() {
       _discoveredPrinters = <String>[];
@@ -156,24 +199,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       switch (_selectedBrand!) {
         case PrinterBrand.epson:
-          try {
-            final printers = await EpsonPrinter.discoverPrinters();
-            setState(() {
-              _discoveredPrinters = List<String>.from(printers); // Create growable list
-              if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
-                _selectedPrinter = printers.isNotEmpty ? printers.first : null;
-              }
-            });
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Found ${printers.length} printers')),
-            );
-          } catch (e) {
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Discovery failed: $e')),
-            );
-          }
+          await _discoverEpsonPrintersStaged();
           break;
         case PrinterBrand.star:
           try {
@@ -249,6 +275,116 @@ class _MyHomePageState extends State<MyHomePage> {
         SnackBar(content: Text('Discovery failed: $e')),
       );
     }
+  }
+
+  // Epson discovery orchestrator: LAN -> Bluetooth -> USB with iOS-specific behavior
+  Future<void> _discoverEpsonPrintersStaged() async {
+    // Prevent concurrent discoveries (both local flag and native state)
+    if (_isDiscovering || _nativeDiscoveryState != 'idle') {
+      debugPrint('Epson discovery already in progress or native state not idle ($_nativeDiscoveryState)');
+      return;
+    }
+
+    // Warn if still connected
+    if (_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please disconnect from printer before discovering new printers'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // Prime native state once before starting (best-effort)
+    try {
+      final native = await EpsonPrinter.getDiscoveryState();
+      _nativeDiscoveryState = (native['state'] as String?) ?? 'idle';
+      if (_nativeDiscoveryState != 'idle') return; // bail if native busy
+    } catch (_) {}
+
+    if (!mounted) return;
+    setState(() {
+      _isDiscovering = true;
+    });
+
+    // Inform user
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Discovering printers (LAN${Platform.isIOS ? ', USB' : ', Bluetooth, USB'})...')),
+    );
+
+    final List<String> snapshot = [];
+    int totalFound = 0;
+
+    // Discover LAN printers first
+    try {
+      final lanPrinters = await EpsonPrinter.discoverPrinters();
+      snapshot.addAll(lanPrinters);
+      totalFound += lanPrinters.length;
+      debugPrint('Epson LAN discovery found ${lanPrinters.length}');
+    } catch (e) {
+      debugPrint('Epson LAN discovery error: $e');
+    }
+
+    // Small delay to let SDK clean up between discoveries
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Discover Bluetooth unless iOS had USB this session (printer disables BT radio)
+    if (!(Platform.isIOS && _usbWasConnectedThisSession)) {
+      try {
+        if (Platform.isAndroid) {
+          final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
+          final bluetoothScanStatus = await Permission.bluetoothScan.status;
+          if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
+            await _checkAndRequestPermissions();
+          }
+        }
+        final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
+        snapshot.addAll(btPrinters);
+        totalFound += btPrinters.length;
+        debugPrint('Epson Bluetooth discovery found ${btPrinters.length}');
+      } catch (e) {
+        debugPrint('Epson Bluetooth discovery error: $e');
+      }
+    } else {
+      debugPrint('iOS: Skipping Epson Bluetooth discovery - USB used this session');
+    }
+
+    // Small delay before USB
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Discover USB printers last
+    try {
+      final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
+      if (Platform.isIOS && usbPrinters.isNotEmpty) {
+        _usbWasConnectedThisSession = true; // mark session flag
+        debugPrint('iOS: USB discovered - Bluetooth hardware now disabled on printer');
+      }
+      snapshot.addAll(usbPrinters);
+      totalFound += usbPrinters.length;
+      debugPrint('Epson USB discovery found ${usbPrinters.length}');
+    } catch (e) {
+      debugPrint('Epson USB discovery error: $e');
+    }
+
+    // iOS filter: if USB was ever connected, hide BT/BLE entries
+    if (Platform.isIOS && _usbWasConnectedThisSession) {
+      snapshot.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isDiscovering = false;
+      _discoveredPrinters = List<String>.from(snapshot);
+      if (_selectedPrinter == null || !_discoveredPrinters.contains(_selectedPrinter)) {
+        _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Discovery complete! Found $totalFound total printers')),
+    );
   }
 
   Future<void> _connectToPrinter() async {
@@ -971,7 +1107,10 @@ class _MyHomePageState extends State<MyHomePage> {
               runSpacing: 8,
               children: [
                 ElevatedButton.icon(
-                  onPressed: _selectedBrand != null ? _discoverPrinters : null,
+                  onPressed: (_selectedBrand != null && !(
+                            (_selectedBrand == PrinterBrand.epson && _isConnected) ||
+                            (_selectedBrand == PrinterBrand.epson && _isDiscovering)
+                          )) ? _discoverPrinters : null,
                   icon: const Icon(Icons.search),
                   label: const Text('Discover'),
                 ),

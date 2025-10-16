@@ -41,20 +41,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.19.1"
-  epson_printer_android:
-    dependency: "direct main"
-    description:
-      path: "../epson_printer_android"
-      relative: true
-    source: path
-    version: "0.0.1"
-  epson_printer_ios:
-    dependency: "direct main"
-    description:
-      path: "../epson_printer_ios"
-      relative: true
-    source: path
-    version: "1.0.0"
   epson_printer_platform_interface:
     dependency: "direct main"
     description:
@@ -215,4 +201,4 @@ packages:
     version: "15.0.0"
 sdks:
   dart: ">=3.7.0-0 <4.0.0"
-  flutter: ">=3.19.0"
+  flutter: ">=3.18.0-18.0.pre.54"

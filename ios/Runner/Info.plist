@@ -45,6 +45,14 @@
 	<string>This app uses Bluetooth to discover and connect to Star printers for printing receipts and documents.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth to discover and connect to Star printers for printing receipts and documents.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+		<string>_https._tcp</string>
+		<string>_printer._tcp</string>
+		<string>_ipp._tcp</string>
+		<string>_pdl-datastream._tcp</string>
+	</array>
 
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app uses the local network to discover and connect to Star printers over Wi‑Fi.</string>
@@ -55,6 +63,8 @@
 	<key>UISupportedExternalAccessoryProtocols</key>
 	<array>
 		<string>jp.star-m.starpro</string>
+		<string>com.epson.posprinter</string>
+		<string>com.epson.escpos</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>

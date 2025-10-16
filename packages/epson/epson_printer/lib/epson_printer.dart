@@ -23,6 +23,11 @@ class EpsonPrinter {
     return _platform.discoverUsbPrinters();
   }
 
+  /// Discovers all printer interfaces in one go (native orchestrated)
+  static Future<List<String>> discoverAllPrinters() {
+    return _platform.discoverAllPrinters();
+  }
+
   @Deprecated('Use discoverBluetoothPrinters() instead; it returns paired and live Bluetooth printers.')
   static Future<List<String>> findPairedBluetoothPrinters() {
     // Alias to keep API simple and consistent
@@ -66,6 +71,16 @@ class EpsonPrinter {
   /// Checks if a printer is currently connected
   static Future<bool> isConnected() {
     return _platform.isConnected();
+  }
+
+  /// Returns current native discovery state (idle, discoveringLan, discoveringBluetooth, discoveringUsb, cleaningUp, suspendedAfterUsbDisconnect)
+  static Future<Map<String, dynamic>> getDiscoveryState() {
+    return _platform.getDiscoveryState();
+  }
+
+  /// Aborts an in-progress discovery and forces idle (use if UI detects freeze)
+  static Future<void> abortDiscovery() {
+    return _platform.abortDiscovery();
   }
 }
 

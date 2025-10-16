@@ -1,0 +1,11 @@
+{
+	"methoderr_errcode" = "Error Code";
+	"methoderr_method" = "Method";
+	"porttype_all" = "PORTTYPE_ALL";
+	"porttype_tcp" = "PORTTYPE_TCP";
+	"porttype_bluetooth" = "PORTTYPE_BLUETOOTH";
+    "porttype_usb" = "PORTTYPE_USB";
+    "porttype_bluetooth_le" = "PORTTYPE_BLUETOOTH_LE";
+	"model_all" = "MODEL_ALL";
+	"type_all" = "TYPE_ALL";
+}
