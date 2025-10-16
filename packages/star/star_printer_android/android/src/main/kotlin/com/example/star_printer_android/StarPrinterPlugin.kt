@@ -105,29 +105,56 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
         val printers = mutableListOf<String>()
         
-        // Try discovery with different interface combinations to find what works
+        // Optimized discovery strategy: try combined first for speed, fallback to individual
         val interfaceTypeSets = listOf(
-          // Try LAN only first (in case WiFi is available)
+          // Try combined discovery FIRST (most efficient - gets everything in one shot)
+          listOf(InterfaceType.Lan, InterfaceType.Bluetooth, InterfaceType.Usb),
+          // Individual fallbacks only if combined misses something (unlikely)
           listOf(InterfaceType.Lan),
-          // Try Bluetooth only (works even without WiFi)
           listOf(InterfaceType.Bluetooth),
-          // Try Bluetooth LE only (works even without WiFi)
-          listOf(InterfaceType.BluetoothLE),
-          // Try USB separately
           listOf(InterfaceType.Usb),
-          // Try combined LAN + Bluetooth (when both are available)
-          listOf(InterfaceType.Lan, InterfaceType.Bluetooth, InterfaceType.BluetoothLE)
+          // Bluetooth LE only as last resort with minimal timeout
+          listOf(InterfaceType.BluetoothLE)
         )
         
-        // Run ALL discovery types and combine results
+        // Run optimized discovery with early exit logic
         val allDiscoveredPrinters = mutableSetOf<String>()
         
-        for (interfaceTypes in interfaceTypeSets) {
+        for ((index, interfaceTypes) in interfaceTypeSets.withIndex()) {
+          val isCombined = interfaceTypes.size > 1 && interfaceTypes.contains(InterfaceType.Lan) && interfaceTypes.contains(InterfaceType.Bluetooth)
+          val isBLEOnly = interfaceTypes.size == 1 && interfaceTypes.first() == InterfaceType.BluetoothLE
+          
+          // Early exit optimization: if combined discovery found printers, skip individual fallbacks
+          if (index > 0 && !isBLEOnly && allDiscoveredPrinters.isNotEmpty()) {
+            println("StarPrinter: Skipping individual discovery for $interfaceTypes - combined discovery already found ${allDiscoveredPrinters.size} printers")
+            continue
+          }
+          
+          // Skip BLE if we already found printers via faster interfaces
+          if (isBLEOnly && allDiscoveredPrinters.isNotEmpty()) {
+            println("StarPrinter: Skipping BLE discovery - already found ${allDiscoveredPrinters.size} printers via faster interfaces")
+            continue
+          }
+          
           try {
             discoveryManager?.stopDiscovery()
             discoveryManager = StarDeviceDiscoveryManagerFactory.create(interfaceTypes, context)
             
-            discoveryManager?.discoveryTime = 8000 // 8 seconds per discovery type
+            // Timeout strategy: combined gets more time, BLE gets less, others are moderate
+            when {
+              isCombined -> {
+                discoveryManager?.discoveryTime = 6000 // 6 seconds for combined (doing all the work)
+                println("StarPrinter: Using extended timeout for combined discovery: 6 seconds")
+              }
+              isBLEOnly -> {
+                discoveryManager?.discoveryTime = 2000 // Only 2 seconds for BLE (very aggressive)
+                println("StarPrinter: Using reduced timeout for BLE-only discovery: 2 seconds")
+              }
+              else -> {
+                discoveryManager?.discoveryTime = 4000 // 4 seconds for individual interfaces
+                println("StarPrinter: Using moderate timeout for individual discovery: 4 seconds")
+              }
+            }
             
             val discoveryCompleted = CompletableDeferred<Unit>()
             val discoveryPrinters = mutableListOf<String>()
@@ -200,24 +227,47 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
         val printers = mutableListOf<String>()
         
-        // Try different Bluetooth interface combinations
+        // Optimized Bluetooth discovery strategy: combined first, then fallbacks
         val bluetoothInterfaceSets = listOf(
-          // Try classic Bluetooth first
-          listOf(InterfaceType.Bluetooth),
-          // Try both classic and LE
+          // Try combined Bluetooth discovery FIRST (most efficient)
           listOf(InterfaceType.Bluetooth, InterfaceType.BluetoothLE),
-          // Try LE only as fallback
+          // Try classic Bluetooth only as fallback
+          listOf(InterfaceType.Bluetooth),
+          // Try LE only as last resort with reduced timeout
           listOf(InterfaceType.BluetoothLE)
         )
         
         var discoverySucceeded = false
         
-        for (interfaceTypes in bluetoothInterfaceSets) {
+        for ((index, interfaceTypes) in bluetoothInterfaceSets.withIndex()) {
+          val isCombined = interfaceTypes.size > 1
+          val isBLEOnly = interfaceTypes.size == 1 && interfaceTypes.first() == InterfaceType.BluetoothLE
+          
+          // Early exit: if combined found printers, skip individual fallbacks
+          if (index > 0 && !isBLEOnly && printers.isNotEmpty()) {
+            println("StarPrinter: Skipping individual Bluetooth discovery for $interfaceTypes - combined already found ${printers.size} printers")
+            continue
+          }
+          
           try {
             discoveryManager?.stopDiscovery()
             discoveryManager = StarDeviceDiscoveryManagerFactory.create(interfaceTypes, context)
             
-            discoveryManager?.discoveryTime = 10000 // 10 seconds
+            // Optimized timeouts for Bluetooth discovery
+            when {
+              isCombined -> {
+                discoveryManager?.discoveryTime = 7000 // 7 seconds for combined (optimized from 10)
+                println("StarPrinter: Using timeout for combined Bluetooth discovery: 7 seconds")
+              }
+              isBLEOnly -> {
+                discoveryManager?.discoveryTime = 3000 // 3 seconds for BLE only (optimized)
+                println("StarPrinter: Using reduced timeout for BLE-only discovery: 3 seconds")
+              }
+              else -> {
+                discoveryManager?.discoveryTime = 5000 // 5 seconds for classic BT only
+                println("StarPrinter: Using timeout for classic Bluetooth discovery: 5 seconds")
+              }
+            }
             
             discoveryManager?.callback = object : StarDeviceDiscoveryManager.Callback {
               override fun onPrinterFound(printer: StarPrinter) {
@@ -590,7 +640,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           discoveryManager?.stopDiscovery()
           discoveryManager = StarDeviceDiscoveryManagerFactory.create(listOf(InterfaceType.Usb), context)
           
-          discoveryManager?.discoveryTime = 5000 // 5 seconds for diagnostics
+          discoveryManager?.discoveryTime = 3000 // 3 seconds for diagnostics (optimized)
           
           val discoveryCompleted = CompletableDeferred<Unit>()
           

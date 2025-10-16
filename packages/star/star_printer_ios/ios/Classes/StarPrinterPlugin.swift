@@ -62,25 +62,48 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         Task {
             var allDiscoveredPrinters: [String] = []
             
-            // Try discovery with different interface combinations to match Android behavior
+            // Optimized discovery strategy: try combined first for speed, fallback to individual
             let interfaceTypeSets: [[StarIO10.InterfaceType]] = [
-                // Try LAN only first
+                // Try combined discovery FIRST (most efficient - gets everything in one shot)
+                [.lan, .bluetooth, .usb],
+                // Individual fallbacks only if combined misses something (unlikely)
                 [.lan],
-                // Try Bluetooth only
-                [.bluetooth],
-                // Try Bluetooth LE only  
-                [.bluetoothLE],
-                // Try USB (might work with Lightning to USB adapters or USB-C iPads)
+                [.bluetooth], 
                 [.usb],
-                // Try combined LAN + Bluetooth when both are available
-                [.lan, .bluetooth, .bluetoothLE]
+                // BLE only as last resort with minimal timeout
+                [.bluetoothLE]
             ]
             
-            for interfaceTypes in interfaceTypeSets {
+            for (index, interfaceTypes) in interfaceTypeSets.enumerated() {
+                let isCombined = interfaceTypes.count > 1 && interfaceTypes.contains(.lan) && interfaceTypes.contains(.bluetooth)
+                let isBLEOnly = interfaceTypes.count == 1 && interfaceTypes.first == .bluetoothLE
+                
+                // Early exit optimization: if combined discovery found printers, skip individual fallbacks
+                if index > 0 && !isBLEOnly && !allDiscoveredPrinters.isEmpty {
+                    print("Skipping individual discovery for \(interfaceTypes) - combined discovery already found \(allDiscoveredPrinters.count) printers")
+                    continue
+                }
+                
+                // Skip BLE if we already found printers via faster interfaces
+                if isBLEOnly && !allDiscoveredPrinters.isEmpty {
+                    print("Skipping BLE discovery - already found \(allDiscoveredPrinters.count) printers via faster interfaces")
+                    continue
+                }
+                
                 do {
                     print("Trying discovery with interfaces: \(interfaceTypes)")
                     let manager = try StarDeviceDiscoveryManagerFactory.create(interfaceTypes: interfaceTypes)
-                    manager.discoveryTime = 8000  // 8 seconds per discovery type
+                    
+                    // Timeout strategy: combined gets more time, BLE gets less, others are moderate
+                    if isCombined {
+                        manager.discoveryTime = 6000  // 6 seconds for combined (doing all the work)
+                        print("Using extended timeout for combined discovery: 6 seconds")
+                    } else if isBLEOnly {
+                        manager.discoveryTime = 2000  // Only 2 seconds for BLE (very aggressive)
+                        print("Using reduced timeout for BLE-only discovery: 2 seconds")
+                    } else {
+                        manager.discoveryTime = 4000  // 4 seconds for individual interfaces
+                    }
                     
                     // Create a simple delegate class inline
                     class SimpleDiscoveryDelegate: NSObject, StarDeviceDiscoveryManagerDelegate {
@@ -135,20 +158,20 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     print("Discovery manager created, starting discovery...")
                     try manager.startDiscovery()
                     
-                    // Wait for discovery to complete with proper timeout
+                    // Wait for discovery with interface-specific timeout
                     var waitTime = 0
-                    let maxWaitTime = 10000 // 10 seconds max per interface type
+                    let maxWaitTime = isCombined ? 7000 : (isBLEOnly ? 3000 : 5000) // 7s combined, 3s BLE, 5s others
                     while !delegate.isFinished && waitTime < maxWaitTime {
-                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                        waitTime += 100
+                        try await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds (optimized polling)
+                        waitTime += 50
                     }
                     
                     // Force stop discovery if it's still running
                     if !delegate.isFinished {
                         print("Discovery timeout reached, stopping discovery for \(interfaceTypes)")
                         manager.stopDiscovery()
-                        // Give it a moment to clean up
-                        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                        // Reduced cleanup time for faster response
+                        try await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
                     }
                     
                     // Add discovered printers to combined list (avoiding duplicates)
@@ -239,7 +262,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 interfaceTypeArray.append(.bluetoothLE)   // Bluetooth LE
                 
                 let manager = try StarDeviceDiscoveryManagerFactory.create(interfaceTypes: interfaceTypeArray)
-                manager.discoveryTime = 10000  // 10 seconds like the official example
+                manager.discoveryTime = 7000  // 7 seconds (optimized from 10)
                 
                 let delegate = BluetoothDiscoveryDelegate()
                 manager.delegate = delegate
@@ -247,20 +270,20 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 print("📡 Starting discovery with both Bluetooth and BLE interfaces...")
                 try manager.startDiscovery()
                 
-                // Wait for discovery to complete with proper timeout
+                // Wait for discovery to complete with optimized timeout
                 var waitTime = 0
-                let maxWaitTime = 12000 // 12 second timeout
+                let maxWaitTime = 8000 // 8 second timeout (optimized from 12)
                 while !delegate.isFinished && waitTime < maxWaitTime {
-                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    waitTime += 100
+                    try await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds (optimized polling)
+                    waitTime += 50
                 }
                 
                 // Force stop discovery if it's still running
                 if !delegate.isFinished {
                     print("Bluetooth discovery timeout reached, stopping discovery")
                     manager.stopDiscovery()
-                    // Give it a moment to clean up
-                    try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                    // Reduced cleanup time for faster response
+                    try await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
                 }
                 
                 discoveredPrinterStrings = delegate.printers
@@ -313,9 +336,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 self.printer = nil
                 self.connectionSettings = nil
                 
-                // Wait a moment for the printer to be released
-                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                print("Waited 2 seconds for printer to be released...")
+                // Wait a shorter time for the printer to be released
+                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second (optimized from 2)
+                print("Waited 1 second for printer to be released...")
             }
             
             // Continue with connection logic...
@@ -810,7 +833,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             do {
                 // Try USB discovery to see if it's actually supported
                 let manager = try StarDeviceDiscoveryManagerFactory.create(interfaceTypes: [.usb])
-                manager.discoveryTime = 5000  // 5 seconds for diagnostics
+                manager.discoveryTime = 3000  // 3 seconds for diagnostics (optimized)
                 
                 class UsbDiscoveryDelegate: NSObject, StarDeviceDiscoveryManagerDelegate {
                     var printers: [String] = []
@@ -836,9 +859,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 
                 // Wait for discovery to complete
                 var waitTime = 0
-                while !delegate.isFinished && waitTime < 6000 { // 6 second timeout
-                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    waitTime += 100
+                while !delegate.isFinished && waitTime < 4000 { // 4 second timeout (optimized)
+                    try await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds (optimized polling)
+                    waitTime += 50
                 }
                 
                 diagnostics["usb_discovery_attempted"] = true

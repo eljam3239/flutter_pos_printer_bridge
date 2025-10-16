@@ -51,3 +51,6 @@ packages/epson/epson_printer_ios/ios/Frameworks
 
 #star related
 packages/star/star_printer_ios/ios/StarIO10.xcframework
+
+#build ?
+ios/build
