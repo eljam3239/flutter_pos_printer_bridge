@@ -410,18 +410,21 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val lane = (details?.get("lane") as? String)?.trim().orEmpty()
         val footer = (details?.get("footer") as? String)?.trim().orEmpty()
 
-        val graphicsOnly = isGraphicsOnlyPrinter()
+  val graphicsOnly = isGraphicsOnlyPrinter()
 
-        val printerBuilder = PrinterBuilder()
-        val fullWidthMm = 72.0 // typical printable width for 80mm receipts
+  val printerBuilder = PrinterBuilder()
+  // Compute dynamic printable characteristics to match iOS parity
+  val targetDots = currentPrintableWidthDots()
+  val fullWidthMm = currentPrintableWidthMm()
+  val cpl = currentColumnsPerLine()
 
         // 1) Header as image for consistent layout
         if (headerTitle.isNotEmpty()) {
-          val headerBitmap = createHeaderBitmap(headerTitle, headerFontSize, 576)
+          val headerBitmap = createHeaderBitmap(headerTitle, headerFontSize, targetDots)
           if (headerBitmap != null) {
             printerBuilder
               .styleAlignment(Alignment.Center)
-              .actionPrintImage(ImageParameter(headerBitmap, 576))
+              .actionPrintImage(ImageParameter(headerBitmap, targetDots))
               .styleAlignment(Alignment.Left)
             if (headerSpacing > 0) printerBuilder.actionFeedLine(headerSpacing)
           }
@@ -429,16 +432,16 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
         // 2) Small image centered
         if (!smallImageBase64.isNullOrEmpty()) {
-          val clamped = smallImageWidth.coerceIn(8, 576)
+          val clamped = smallImageWidth.coerceIn(8, targetDots)
           val decoded = decodeBase64ToBitmap(smallImageBase64)
           val src = decoded ?: createPlaceholderBitmap(clamped, clamped)
           if (src != null) {
             val flat = flattenBitmap(src, clamped)
-            val centered = centerOnCanvas(flat, 576)
+            val centered = centerOnCanvas(flat, targetDots)
             if (centered != null) {
               printerBuilder
                 .styleAlignment(Alignment.Center)
-                .actionPrintImage(ImageParameter(centered, 576))
+                .actionPrintImage(ImageParameter(centered, targetDots))
                 .styleAlignment(Alignment.Left)
               if (smallImageSpacing > 0) printerBuilder.actionFeedLine(smallImageSpacing)
             }
@@ -448,10 +451,12 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   // 2.5) Details block (we will later inject items between ruled lines)
         val hasAnyDetails = listOf(locationText, dateText, timeText, cashier, receiptNum, lane, footer).any { it.isNotEmpty() }
         if (hasAnyDetails) {
-          if (graphicsOnly) {
-            val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, 576)
+          if (graphicsOnly || isLabelPrinter()) {
+            // Force label printers to a 576px canvas to ensure full-width usage like iOS
+            val detailsCanvas = if (isLabelPrinter()) 576 else targetDots
+            val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, detailsCanvas)
             if (detailsBmp != null) {
-              printerBuilder.actionPrintImage(ImageParameter(detailsBmp, 576)).actionFeedLine(1)
+              printerBuilder.actionPrintImage(ImageParameter(detailsBmp, detailsCanvas)).actionFeedLine(1)
             }
           } else {
             // Centered location
@@ -462,8 +467,10 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
             // Centered Tax Invoice
             printerBuilder.styleAlignment(Alignment.Center).actionPrintText("Tax Invoice\n").styleAlignment(Alignment.Left)
             // Left date/time, right cashier
-            val leftParam = TextParameter().setWidth(24)
-            val rightParam = TextParameter().setWidth(24, TextWidthParameter().setAlignment(TextAlignment.Right))
+            val leftWidthTop = (cpl / 2).coerceAtLeast(8)
+            val rightWidthTop = (cpl - leftWidthTop).coerceAtLeast(8)
+            val leftParam = TextParameter().setWidth(leftWidthTop)
+            val rightParam = TextParameter().setWidth(rightWidthTop, TextWidthParameter().setAlignment(TextAlignment.Right))
             val left1 = listOf(dateText, timeText).filter { it.isNotEmpty() }.joinToString(" ")
             val right1 = if (cashier.isNotEmpty()) "Cashier: $cashier" else ""
             printerBuilder.actionPrintText(left1, leftParam)
@@ -480,8 +487,11 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
             // Inject item lines (text path only here). Each item: "Q x Name" left, price right.
             val itemList = items?.mapNotNull { it as? Map<*, *> } ?: emptyList()
             if (itemList.isNotEmpty()) {
-              val leftParam = TextParameter().setWidth(30) // more left width for description
-              val rightParam = TextParameter().setWidth(18, TextWidthParameter().setAlignment(TextAlignment.Right))
+              // Allocate ~62.5% to left, remaining to right based on CPL
+              val leftItemsWidth = ((cpl * 5) / 8).coerceAtLeast(8)
+              val rightItemsWidth = (cpl - leftItemsWidth).coerceAtLeast(6)
+              val leftParam = TextParameter().setWidth(leftItemsWidth) // more left width for description
+              val rightParam = TextParameter().setWidth(rightItemsWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
               for (item in itemList) {
                 val qty = (item["quantity"] as? String)?.trim().orEmpty()
                 val name = (item["name"] as? String)?.trim().orEmpty()
@@ -513,8 +523,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           // Skip generating an empty body bitmap to prevent a blank rectangle artifact
           // on graphics-only printers (e.g., TSP100III). Only render if there is real content.
           if (trimmedBody.isNotEmpty()) {
-            val bodyBitmap = createTextBitmap(content)
-            printerBuilder.actionPrintImage(ImageParameter(bodyBitmap, 576)).actionFeedLine(2)
+            val bodyBitmap = createTextBitmap(content, targetDots)
+            printerBuilder.actionPrintImage(ImageParameter(bodyBitmap, targetDots)).actionFeedLine(2)
           } else {
             // Light feed to keep a small margin before cut for visual consistency.
             printerBuilder.actionFeedLine(1)
@@ -727,9 +737,44 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 
+  // Heuristic: determine if current model is a label printer (e.g., mC-Label2)
+  private fun isLabelPrinter(): Boolean {
+    return try {
+      val modelStr = printer?.information?.model?.toString() ?: return false
+      modelStr.lowercase().contains("label")
+    } catch (_: Exception) { false }
+  }
+
+  // Estimate printable width in dots by model family (conservative defaults)
+  private fun currentPrintableWidthDots(): Int {
+    return try {
+      val ms = (printer?.information?.model?.toString() ?: "").lowercase()
+      when {
+        // Label printers - render at 576 and let device scale if needed
+        ms.contains("label") -> 576
+        // 58mm class
+        ms.contains("mpop") || ms.contains("mcp2") -> 384
+        // 80mm class
+        ms.contains("mcp3") || ms.contains("tsp100") || ms.contains("tsp650") -> 576
+        else -> 576
+      }
+    } catch (_: Exception) { 576 }
+  }
+
+  private fun currentPrintableWidthMm(): Double {
+    val dots = currentPrintableWidthDots()
+    // Star thermal printers are ~203dpi (~8 dots/mm)
+    return dots / 8.0
+  }
+
+  private fun currentColumnsPerLine(): Int {
+    val dots = currentPrintableWidthDots()
+    return if (dots >= 576) 48 else 32
+  }
+
   // Render multiline text into a Bitmap suitable for printing
   private fun createTextBitmap(text: String): Bitmap {
-    val width = 576 // 80mm paper standard printable width (pixels)
+    val width = 576 // default fallback
     val padding = 20
 
     val textPaint = TextPaint().apply {
@@ -761,6 +806,49 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
     val height = (layout.height + padding * 2).coerceAtLeast(100)
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    canvas.drawColor(Color.WHITE)
+    canvas.save()
+    canvas.translate(padding.toFloat(), padding.toFloat())
+    layout.draw(canvas)
+    canvas.restore()
+    return bitmap
+  }
+
+  // Overload that renders text to a specified width (in dots)
+  private fun createTextBitmap(text: String, width: Int): Bitmap {
+    val w = width.coerceIn(8, 576)
+    val padding = 20
+
+    val textPaint = TextPaint().apply {
+      isAntiAlias = true
+      color = Color.BLACK
+      textSize = 24f
+    }
+
+    val contentWidth = w - (padding * 2)
+
+    val layout: StaticLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      StaticLayout.Builder
+        .obtain(text, 0, text.length, textPaint, contentWidth)
+        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+        .setIncludePad(false)
+        .build()
+    } else {
+      @Suppress("DEPRECATION")
+      StaticLayout(
+        text,
+        textPaint,
+        contentWidth,
+        Layout.Alignment.ALIGN_NORMAL,
+        1.0f,
+        0.0f,
+        false
+      )
+    }
+
+    val height = (layout.height + padding * 2).coerceAtLeast(100)
+    val bitmap = Bitmap.createBitmap(w, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     canvas.drawColor(Color.WHITE)
     canvas.save()
