@@ -7,6 +7,41 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     private var connectionSettings: StarConnectionSettings?
     private var discoveredPrinters: [StarPrinter] = []
     
+    // Determine printable pixel width for current printer (rough mapping by model)
+    private func currentPrintableWidthDots() -> Int {
+        guard let model = self.printer?.information?.model else { return 576 }
+        let name = String(describing: model).lowercased()
+        // Common mappings (approx): 80mm -> 576 dots, 58mm/2-inch -> 384 dots
+        if name.contains("mpop") { return 384 }
+        if name.contains("mc_label2") || name.contains("mc-label2") { return 384 }
+        if name.contains("mc_print3") || name.contains("mc-print3") { return 576 }
+        if name.contains("tsp100iv") || name.contains("tsp100iii") { return 576 }
+        return 576
+    }
+    
+    // Approximate printable width in millimeters for ruled lines
+    private func currentPrintableWidthMm() -> Double {
+        let dots = currentPrintableWidthDots()
+        if dots >= 560 { return 72.0 } // 80mm class
+        if dots >= 380 { return 48.0 } // 58mm/2-inch class
+        return 40.0
+    }
+    
+    // Estimate characters per line for TextParameter widths
+    private func currentColumnsPerLine() -> Int {
+        let dots = currentPrintableWidthDots()
+        if dots >= 560 { return 48 }
+        if dots >= 380 { return 32 }
+        return 24
+    }
+
+    // Identify narrow label printers where text-mode columns may not map well
+    private func isLabelPrinter() -> Bool {
+        guard let model = self.printer?.information?.model else { return false }
+        let name = String(describing: model).lowercased()
+        return name.contains("mc_label2") || name.contains("mc-label2")
+    }
+    
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "star_printer", binaryMessenger: registrar.messenger())
         let instance = StarPrinterPlugin()
@@ -582,15 +617,16 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
 
                 // Build printer actions according to layout (follow Star sample structure)
                 let printerBuilder = StarXpandCommand.PrinterBuilder()
-                // Assume 80mm printers (tsp100/mC-Print3) => ~72mm printable. Can be refined per model.
-                let fullWidthMm: Double = 72.0
+                // Use detected printable width per model
+                let targetDots = currentPrintableWidthDots()
+                let fullWidthMm: Double = currentPrintableWidthMm()
 
                 // 1) Header: print as image (simple UIImage like the sample)
                 if !headerTitle.isEmpty {
-                    if let headerImageRaw = createTextImage(text: headerTitle, fontSize: headerFontSize, imageWidth: 576),
-                       let headerFlat = flattenImage(headerImageRaw, targetWidth: 576) {
-                        print("Printing header image at width=576 (flattened UIImage)")
-                        let param = StarXpandCommand.Printer.ImageParameter(image: headerFlat, width: 576)
+                    if let headerImageRaw = createTextImage(text: headerTitle, fontSize: headerFontSize, imageWidth: CGFloat(targetDots)),
+                       let headerFlat = flattenImage(headerImageRaw, targetWidth: targetDots) {
+                        print("Printing header image at width=\(targetDots) (flattened UIImage)")
+                        let param = StarXpandCommand.Printer.ImageParameter(image: headerFlat, width: targetDots)
                         _ = printerBuilder
                             .styleAlignment(.center)
                             .actionPrintImage(param)
@@ -609,7 +645,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     }
                     if let src = sourceImage, let flatSmall = flattenImage(src, targetWidth: clampedWidth) {
                         // Center the small image on a full-width canvas to ensure horizontal centering on all models
-                        let canvasWidth = 576
+                        let canvasWidth = targetDots
                         let centered = centerOnCanvas(image: flatSmall, canvasWidth: canvasWidth) ?? flatSmall
                         print("Printing small image centered on canvas (target=\(clampedWidth), canvas=\(canvasWidth))")
                         let param = StarXpandCommand.Printer.ImageParameter(image: centered, width: canvasWidth)
@@ -627,7 +663,12 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 let items = (layout?["items"] as? [[String: Any]]) ?? []
                 let hasAnyDetails = !locationText.isEmpty || !dateText.isEmpty || !timeText.isEmpty || !cashier.isEmpty || !receiptNum.isEmpty || !lane.isEmpty || !footer.isEmpty
                 if hasAnyDetails {
-                    if graphicsOnly {
+                    let labelPrinter = isLabelPrinter()
+                    let forceGraphicsDetails = graphicsOnly || labelPrinter
+                    if forceGraphicsDetails {
+                        // For label printers, render details image on a full-width canvas (576) and
+                        // let the printer scale to media width, to match header/small image behavior.
+                        let detailsCanvasDots = labelPrinter ? 576 : targetDots
                         if let detailsImage = createDetailsImage(location: locationText,
                                                                  date: dateText,
                                                                  time: timeText,
@@ -636,8 +677,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                                                  lane: lane,
                                                                  footer: footer,
                                                                  items: items,
-                                                                 imageWidth: 576) {
-                            let param = StarXpandCommand.Printer.ImageParameter(image: detailsImage, width: 576)
+                                                                 imageWidth: CGFloat(detailsCanvasDots)) {
+                            let param = StarXpandCommand.Printer.ImageParameter(image: detailsImage, width: detailsCanvasDots)
                             _ = printerBuilder.actionPrintImage(param)
                             _ = printerBuilder.actionFeedLine(1)
                         }
@@ -658,8 +699,11 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                         // Line: left date/time, right cashier
                         let left1 = "\(dateText) \(timeText)"
                         let right1 = cashier.isEmpty ? "" : "Cashier: \(cashier)"
-                        let leftParam = StarXpandCommand.Printer.TextParameter().setWidth(24)
-                        let rightParam = StarXpandCommand.Printer.TextParameter().setWidth(24, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+                        let totalCPL = currentColumnsPerLine()
+                        let leftWidth = max(8, totalCPL / 2)
+                        let rightWidth = max(8, totalCPL - leftWidth)
+                        let leftParam = StarXpandCommand.Printer.TextParameter().setWidth(leftWidth)
+                        let rightParam = StarXpandCommand.Printer.TextParameter().setWidth(rightWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
                         _ = printerBuilder.actionPrintText(left1, leftParam)
                         _ = printerBuilder.actionPrintText("\(right1)\n", rightParam)
                         // Line: left receipt no, right lane
@@ -673,8 +717,10 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
 
                         // Item lines inserted here (left description, right price) before second ruled line
                         if !items.isEmpty {
-                            let leftParamItems = StarXpandCommand.Printer.TextParameter().setWidth(30)
-                            let rightParamItems = StarXpandCommand.Printer.TextParameter().setWidth(18, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+                            let leftItemsWidth = max(8, Int(Double(totalCPL) * 0.625))
+                            let rightItemsWidth = max(6, totalCPL - leftItemsWidth)
+                            let leftParamItems = StarXpandCommand.Printer.TextParameter().setWidth(leftItemsWidth)
+                            let rightParamItems = StarXpandCommand.Printer.TextParameter().setWidth(rightItemsWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
                             for item in items {
                                 let qty = (item["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                 let name = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
@@ -709,9 +755,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     // Only render a body image if there's actual non‑whitespace content to avoid
                     // an empty white rectangle artifact on graphics‑only models (e.g. TSP100III).
                     if !trimmedBody.isEmpty,
-                       let textImage = createTextImage(text: content, fontSize: 24, imageWidth: 576),
-                       let safeText = ensureVisibleImage(textImage, targetWidth: 576) {
-                        let param = StarXpandCommand.Printer.ImageParameter(image: safeText, width: 576)
+                       let textImage = createTextImage(text: content, fontSize: 24, imageWidth: CGFloat(targetDots)),
+                       let safeText = ensureVisibleImage(textImage, targetWidth: targetDots) {
+                        let param = StarXpandCommand.Printer.ImageParameter(image: safeText, width: targetDots)
                         _ = printerBuilder.actionPrintImage(param)
                         _ = printerBuilder.actionFeedLine(2)
                     } else {
