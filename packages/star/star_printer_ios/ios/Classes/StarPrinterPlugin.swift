@@ -11,9 +11,21 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     private func currentPrintableWidthDots() -> Int {
         guard let model = self.printer?.information?.model else { return 576 }
         let name = String(describing: model).lowercased()
+        print("DEBUG: Printer model for width calculation: \(name)")
         // Common mappings (approx): 80mm -> 576 dots, 58mm/2-inch -> 384 dots
+        // TSP100SK uses 2" labels at 203 DPI = ~406 dots, but printable area appears much narrower
+        // 
+        // ADJUST THIS VALUE if labels are still being cut off:
+        // - If content is cut off on right: decrease this number (try 220, 200, etc.)
+        // - If content appears too narrow with margins: increase this number (try 260, 280, etc.)
+        let tsp100skWidth = 576  // Optimized for TSP100SK label printing
+        
         if name.contains("mpop") { return 384 }
         if name.contains("mc_label2") || name.contains("mc-label2") { return 384 }
+        if name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk") { 
+            print("DEBUG: TSP100SK detected, using \(tsp100skWidth) dots width")
+            return tsp100skWidth
+        }
         if name.contains("mc_print3") || name.contains("mc-print3") { return 576 }
         if name.contains("tsp100iv") || name.contains("tsp100iii") { return 576 }
         return 576
@@ -23,6 +35,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     private func currentPrintableWidthMm() -> Double {
         let dots = currentPrintableWidthDots()
         if dots >= 560 { return 72.0 } // 80mm class
+        if dots >= 240 && dots <= 250 { return 48.0 } // TSP100SK 2-inch label printer
         if dots >= 380 { return 48.0 } // 58mm/2-inch class
         return 40.0
     }
@@ -32,6 +45,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let dots = currentPrintableWidthDots()
         if dots >= 560 { return 48 }
         if dots >= 380 { return 32 }
+        // TSP100SK with 240 dots - at standard font (~12 dots/char), can fit ~20 chars
+        if dots >= 240 { return 32 }  // Use 32 to match standard 2-inch printers
         return 24
     }
 
@@ -39,7 +54,12 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     private func isLabelPrinter() -> Bool {
         guard let model = self.printer?.information?.model else { return false }
         let name = String(describing: model).lowercased()
-        return name.contains("mc_label2") || name.contains("mc-label2")
+        let isLabel = name.contains("mc_label2") || name.contains("mc-label2") || 
+               name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk") ||
+               name.contains("mpop") ||  // mPOP can also print labels
+               name.contains("tsp100iv")  // TSP100IV can print labels too
+        print("DEBUG: isLabelPrinter check for '\(name)': \(isLabel)")
+        return isLabel
     }
     
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -378,141 +398,60 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             
             // Continue with connection logic...
             
-            // Try to find the discovered printer object first to get IP address info
-            let foundPrinter = self.discoveredPrinters.first { printer in
-                // Match by identifier (IP address) or MAC address
-                return printer.connectionSettings.identifier == identifier
-            }
+            // Use MAC address directly for all printers - let StarIO SDK resolve
+            print("Printer not found in discovered list, creating new connection...")
             
-            // For now, let's just extract IP from the debug output we've seen
-            // We know the IP addresses are 10.20.30.70 and 10.20.30.155
-            var ipAddress: String? = nil
-            if identifier == "0011625AA26C" {
-                ipAddress = "10.20.30.70"  // Just use the IP address
-            } else if identifier == "00116242A952" {
-                ipAddress = "10.20.30.155"  // Just use the IP address
-            }
-            
-            if let ipAddr = ipAddress {
-                print("Using IP address for connection: \(ipAddr)")
-                
-                do {
-                    // Create new connection settings with IP address and explicit settings
-                    self.connectionSettings = StarConnectionSettings(
-                        interfaceType: .lan,
-                        identifier: ipAddr,
-                        autoSwitchInterface: false  // Try without auto-switch first
-                    )
-                    
-                    print("Creating StarPrinter with IP: \(ipAddr)")
-                    self.printer = StarPrinter(self.connectionSettings!)
-                    
-                    print("Attempting to open connection (30 second timeout)...")
-                    print("Connection settings: \(self.connectionSettings!)")
-                    
-                    // Try with a longer timeout and better error handling
-                    do {
-                        let _ = try await withTimeout(30.0) {
-                            try await self.printer?.open()
-                        }
-                        
-                        print("Connection successful!")
-                        
-                        DispatchQueue.main.async {
-                            result(nil)
-                        }
-                    } catch {
-                        print("Connection timeout or error: \(error)")
-                        throw error
-                    }
-                    
-                } catch {
-                    print("Connection failed with error: \(error)")
-                    print("Error type: \(type(of: error))")
-                    
-                    // Let's also try the alternative approach with auto-switch
-                    print("Trying alternative connection with auto-switch enabled...")
-                    
-                    do {
-                        self.connectionSettings = StarConnectionSettings(
-                            interfaceType: .lan,
-                            identifier: ipAddr,
-                            autoSwitchInterface: true
-                        )
-                        
-                        self.printer = StarPrinter(self.connectionSettings!)
-                        
-                        let _ = try await withTimeout(15.0) {
-                            try await self.printer?.open()
-                        }
-                        
-                        print("Alternative connection successful!")
-                        
-                        DispatchQueue.main.async {
-                            result(nil)
-                        }
-                    } catch {
-                        print("Alternative connection also failed: \(error)")
-                        DispatchQueue.main.async {
-                            result(FlutterError(code: "CONNECTION_FAILED", message: "Failed to connect: \(error)", details: nil))
-                        }
-                    }
+            do {
+                let starInterfaceType: InterfaceType
+                switch interfaceType {
+                case "bluetooth":
+                    starInterfaceType = .bluetooth
+                case "bluetoothLE":
+                    starInterfaceType = .bluetoothLE
+                case "lan":
+                    starInterfaceType = .lan
+                case "usb":
+                    starInterfaceType = .usb
+                default:
+                    starInterfaceType = .lan
                 }
-            } else {
-                print("Printer not found in discovered list, creating new connection...")
                 
-                do {
-                    let starInterfaceType: InterfaceType
-                    switch interfaceType {
-                    case "bluetooth":
-                        starInterfaceType = .bluetooth
-                    case "bluetoothLE":
-                        starInterfaceType = .bluetoothLE
-                    case "lan":
-                        starInterfaceType = .lan
-                    case "usb":
-                        starInterfaceType = .usb
-                    default:
-                        starInterfaceType = .lan
-                    }
-                    
-                    // Parse identifier to remove model info if present
-                    let cleanIdentifier = identifier.components(separatedBy: ":").first ?? identifier
-                    print("Using clean identifier: \(cleanIdentifier)")
-                    
-                    self.connectionSettings = StarConnectionSettings(
-                        interfaceType: starInterfaceType,
-                        identifier: cleanIdentifier
-                    )
-                    
-                    self.printer = StarPrinter(self.connectionSettings!)
-                    
-                    print("Attempting to open connection...")
-                    
-                    // Set a shorter timeout and better error handling
-                    let timeoutTask = Task {
-                        try await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-                        throw NSError(domain: "com.starprinter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Connection timeout after 10 seconds"])
-                    }
-                    
-                    let connectionTask = Task {
-                        try await self.printer?.open()
-                    }
-                    
-                    // Race between connection and timeout
-                    _ = try await connectionTask.value
-                    timeoutTask.cancel()
-                    
-                    print("Connection successful!")
-                    
-                    DispatchQueue.main.async {
-                        result(nil)
-                    }
-                } catch {
-                    print("Connection failed with error: \(error)")
-                    DispatchQueue.main.async {
-                        result(FlutterError(code: "CONNECTION_FAILED", message: "Failed to connect: \(error)", details: nil))
-                    }
+                // Parse identifier to remove model info if present
+                let cleanIdentifier = identifier.components(separatedBy: ":").first ?? identifier
+                print("Using clean identifier: \(cleanIdentifier)")
+                
+                self.connectionSettings = StarConnectionSettings(
+                    interfaceType: starInterfaceType,
+                    identifier: cleanIdentifier
+                )
+                
+                self.printer = StarPrinter(self.connectionSettings!)
+                
+                print("Attempting to open connection...")
+                
+                // Set a shorter timeout and better error handling
+                let timeoutTask = Task {
+                    try await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                    throw NSError(domain: "com.starprinter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Connection timeout after 10 seconds"])
+                }
+                
+                let connectionTask = Task {
+                    try await self.printer?.open()
+                }
+                
+                // Race between connection and timeout
+                _ = try await connectionTask.value
+                timeoutTask.cancel()
+                
+                print("Connection successful!")
+                
+                DispatchQueue.main.async {
+                    result(nil)
+                }
+            } catch {
+                print("Connection failed with error: \(error)")
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "CONNECTION_FAILED", message: "Failed to connect: \(error)", details: nil))
                 }
             }
         }
@@ -560,6 +499,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let header = layout?["header"] as? [String: Any]
     let imageBlock = layout?["image"] as? [String: Any]
     let details = layout?["details"] as? [String: Any]
+    let barcodeBlock = layout?["barcode"] as? [String: Any]
 
         // Defaults
         let headerTitle = (header?["title"] as? String) ?? ""
@@ -576,6 +516,21 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let receiptNum = (details?["receiptNum"] as? String) ?? ""
     let lane = (details?["lane"] as? String) ?? ""
     let footer = (details?["footer"] as? String) ?? ""
+    // Label-specific details
+    let category = (details?["category"] as? String) ?? ""
+    let size = (details?["size"] as? String) ?? ""
+    let color = (details?["color"] as? String) ?? ""
+    let labelPrice = (details?["price"] as? String) ?? ""
+    let layoutType = (details?["layoutType"] as? String) ?? "mixed"  // vertical_centered, mixed, or horizontal
+    let printableAreaMm = (details?["printableAreaMm"] as? Double) ?? 51.0  // Default to 58mm paper
+    // Barcode
+    let barcodeContent = (barcodeBlock?["content"] as? String) ?? ""
+    let barcodeSymbology = (barcodeBlock?["symbology"] as? String) ?? "code128"
+    let barcodeHeight = (barcodeBlock?["height"] as? Int) ?? 50
+    let barcodePrintHRI = (barcodeBlock?["printHRI"] as? Bool) ?? true
+    
+    print("DEBUG: Barcode settings from Dart - content=\(barcodeContent), height=\(barcodeHeight), symbology=\(barcodeSymbology)")
+    print("DEBUG: Label layout - type=\(layoutType), printableArea=\(printableAreaMm)mm")
 
         print("Printer is connected, attempting to print with structured layout...")
         
@@ -601,6 +556,13 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     print("  Emulation: \(printerInfo.emulation) (raw: \(printerInfo.emulation.rawValue))")
                     print("  Connection Type: \(self.printer?.connectionSettings.interfaceType.rawValue ?? -1)")
                     print("  Identifier: \(self.printer?.connectionSettings.identifier ?? "unknown")")
+                    
+                    // Try to log all available properties
+                    print("  Checking for paper width information...")
+                    let mirror = Mirror(reflecting: printerInfo)
+                    for child in mirror.children {
+                        print("  Property: \(child.label ?? "unknown") = \(child.value)")
+                    }
                 } else {
                     print("No printer information available")
                 }
@@ -617,21 +579,73 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
 
                 // Build printer actions according to layout (follow Star sample structure)
                 let printerBuilder = StarXpandCommand.PrinterBuilder()
-                // Use detected printable width per model
-                let targetDots = currentPrintableWidthDots()
-                let fullWidthMm: Double = currentPrintableWidthMm()
+                
+                // Check if this is a label print job (has label-specific fields)
+                let hasLabelFields = !category.isEmpty || !size.isEmpty || !color.isEmpty || !labelPrice.isEmpty
+                
+                // For label printers OR when printing labels, use the printable area from settings
+                // For receipt printers doing receipt jobs, use auto-detected width
+                let labelPrinter = isLabelPrinter()
+                let useLabelMode = (labelPrinter || hasLabelFields) && printableAreaMm > 0
+                let targetDots: Int
+                let fullWidthMm: Double
+                
+                // Detect printer DPI and magnification needs
+                var textMagnification: (width: Int, height: Int) = (1, 1)
+                
+                if useLabelMode {
+                    // Detect printer DPI based on model
+                    let dotsPerMm: Double
+                    if let model = self.printer?.information?.model {
+                        let modelName = String(describing: model).lowercased()
+                        if modelName.contains("mc_label2") || modelName.contains("mc-label2") {
+                            dotsPerMm = 11.8  // mcLabel2 is 300 DPI (300/25.4 = 11.8 dots/mm)
+                            textMagnification = (2, 2)  // Scale text 2x to match TSP100IVSK visual size
+                            print("DEBUG: Detected mcLabel2 - using 300 DPI (11.8 dots/mm) with 2x text magnification")
+                        } else {
+                            dotsPerMm = 8.0   // TSP100IVSK is 203 DPI (203/25.4 = 8.0 dots/mm)
+                            print("DEBUG: Detected TSP100IVSK or similar - using 203 DPI (8 dots/mm)")
+                        }
+                    } else {
+                        dotsPerMm = 8.0  // Default to 203 DPI if model unknown
+                        print("DEBUG: Unknown model - defaulting to 203 DPI (8 dots/mm)")
+                    }
+                    
+                    targetDots = Int(printableAreaMm * dotsPerMm)
+                    fullWidthMm = printableAreaMm
+                    print("DEBUG: Using label printable area: \(printableAreaMm)mm = \(targetDots) dots")
+                } else {
+                    // Use auto-detected width for receipts
+                    targetDots = currentPrintableWidthDots()
+                    fullWidthMm = currentPrintableWidthMm()
+                    print("DEBUG: Using auto-detected width: \(fullWidthMm)mm = \(targetDots) dots")
+                }
 
-                // 1) Header: print as image (simple UIImage like the sample)
+                // 1) Header: print as bold text instead of image for labels
                 if !headerTitle.isEmpty {
-                    if let headerImageRaw = createTextImage(text: headerTitle, fontSize: headerFontSize, imageWidth: CGFloat(targetDots)),
-                       let headerFlat = flattenImage(headerImageRaw, targetWidth: targetDots) {
-                        print("Printing header image at width=\(targetDots) (flattened UIImage)")
-                        let param = StarXpandCommand.Printer.ImageParameter(image: headerFlat, width: targetDots)
+                    if useLabelMode {
+                        // For labels, use bold text instead of image
                         _ = printerBuilder
                             .styleAlignment(.center)
-                            .actionPrintImage(param)
+                            .styleBold(true)
+                            .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                            .actionPrintText("\(headerTitle)\n")
+                            .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                            .styleBold(false)
                             .styleAlignment(.left)
                         if headerSpacing > 0 { _ = printerBuilder.actionFeedLine(headerSpacing) }
+                    } else {
+                        // For receipts, keep using image
+                        if let headerImageRaw = createTextImage(text: headerTitle, fontSize: headerFontSize, imageWidth: CGFloat(targetDots)),
+                           let headerFlat = flattenImage(headerImageRaw, targetWidth: targetDots) {
+                            print("Printing header image at width=\(targetDots) (flattened UIImage)")
+                            let param = StarXpandCommand.Printer.ImageParameter(image: headerFlat, width: targetDots)
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .actionPrintImage(param)
+                                .styleAlignment(.left)
+                            if headerSpacing > 0 { _ = printerBuilder.actionFeedLine(headerSpacing) }
+                        }
                     }
                 }
 
@@ -659,16 +673,21 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     }
                 }
 
-                // 2.5) Details block below the image
+                // Store barcode info for later (print at end for labels)
+                let hasBarcodeData = !barcodeContent.isEmpty
+                let barcodeSymbology_stored = barcodeSymbology
+                let barcodeHeight_stored = barcodeHeight
+                let barcodePrintHRI_stored = barcodePrintHRI
+
+                // 2.6) Details block below the image/barcode
                 let items = (layout?["items"] as? [[String: Any]]) ?? []
                 let hasAnyDetails = !locationText.isEmpty || !dateText.isEmpty || !timeText.isEmpty || !cashier.isEmpty || !receiptNum.isEmpty || !lane.isEmpty || !footer.isEmpty
                 if hasAnyDetails {
-                    let labelPrinter = isLabelPrinter()
-                    let forceGraphicsDetails = graphicsOnly || labelPrinter
-                    if forceGraphicsDetails {
-                        // For label printers, render details image on a full-width canvas (576) and
-                        // let the printer scale to media width, to match header/small image behavior.
-                        let detailsCanvasDots = labelPrinter ? 576 : targetDots
+                    // Only use image rendering for graphics-only printers (TSP100IIIW)
+                    // Label printers (TSP100SK) support native text commands
+                    if graphicsOnly {
+                        // For label printers, use actual targetDots width for proper rendering
+                        let detailsCanvasDots = targetDots
                         if let detailsImage = createDetailsImage(location: locationText,
                                                                  date: dateText,
                                                                  time: timeText,
@@ -749,28 +768,255 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     }
                 }
 
-                // 3) Body content
+                // 3) Body content or Label template
                 let trimmedBody = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if graphicsOnly {
-                    // Only render a body image if there's actual non‑whitespace content to avoid
-                    // an empty white rectangle artifact on graphics‑only models (e.g. TSP100III).
+                
+                print("DEBUG: Rendering body content - graphicsOnly=\(graphicsOnly), useLabelMode=\(useLabelMode), hasLabelFields=\(hasLabelFields), contentLength=\(trimmedBody.count)")
+                
+                if useLabelMode && hasLabelFields {
+                    // Label template rendering
+                    print("DEBUG: Rendering label template with layout: \(layoutType)")
+                    
+                    if layoutType == "vertical_centered" {
+                        // 38mm paper (34.5mm printable) - everything vertical and centered
+                        if !category.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("\(category)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                        }
+                        
+                        if !labelPrice.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleBold(true)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("$\(labelPrice)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                                .styleBold(false)
+                        }
+                        // Size and Color on same line, centered
+                        var combinedLine = ""
+                        if !size.isEmpty {
+                            combinedLine += size
+                        }
+                        if !color.isEmpty {
+                            if !combinedLine.isEmpty {
+                                combinedLine += "  "
+                            }
+                            combinedLine += color
+                        }
+                        
+                        if !combinedLine.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .actionPrintText("\(combinedLine)\n")
+                                .styleAlignment(.left)
+                        }
+                    } else if layoutType == "mixed" {
+                        // 58mm paper (51mm printable) - optimized horizontal layout
+                        // Category centered below header (skip if already in header)
+                        if !category.isEmpty && category != headerTitle {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("\(category)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                                .styleAlignment(.left)
+                        }
+                        
+                        // Price centered on its own line (bold)
+                        if !labelPrice.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleBold(true)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("$\(labelPrice)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                                .styleBold(false)
+                                .styleAlignment(.left)
+                        }
+                        
+                        // Size and Color on one line, centered (no pipes)
+                        var combinedLine = ""
+                        if !size.isEmpty {
+                            combinedLine += size
+                        }
+                        if !color.isEmpty {
+                            if !combinedLine.isEmpty {
+                                combinedLine += "  "
+                            }
+                            combinedLine += color
+                        }
+                        
+                        if !combinedLine.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .actionPrintText("\(combinedLine)\n")
+                                .styleAlignment(.left)
+                        }
+                    } else {
+                        // 80mm paper (72mm printable) - same layout as 58mm
+                        // Category centered below header (skip if already in header)
+                        if !category.isEmpty && category != headerTitle {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("\(category)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                                .styleAlignment(.left)
+                        }
+                        
+                        // Price centered on its own line (bold)
+                        if !labelPrice.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .styleBold(true)
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: textMagnification.width, height: textMagnification.height))
+                                .actionPrintText("$\(labelPrice)\n")
+                                .styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+                                .styleBold(false)
+                                .styleAlignment(.left)
+                        }
+                        
+                        // Size and Color on one line, centered (no pipes)
+                        var combinedLine = ""
+                        if !size.isEmpty {
+                            combinedLine += size
+                        }
+                        if !color.isEmpty {
+                            if !combinedLine.isEmpty {
+                                combinedLine += "  "
+                            }
+                            combinedLine += color
+                        }
+                        
+                        if !combinedLine.isEmpty {
+                            _ = printerBuilder
+                                .styleAlignment(.center)
+                                .actionPrintText("\(combinedLine)\n")
+                                .styleAlignment(.left)
+                        }
+                    }
+                    
+                    // Now print barcode at the bottom for labels (no extra spacing)
+                    if hasBarcodeData {
+                        print("DEBUG: Printing barcode at bottom: content=\(barcodeContent), symbology=\(barcodeSymbology_stored), height=\(barcodeHeight_stored)")
+                        
+                        let symbology: StarXpandCommand.Printer.BarcodeSymbology
+                        switch barcodeSymbology_stored.lowercased() {
+                        case "code128":
+                            symbology = .code128
+                        case "code39":
+                            symbology = .code39
+                        case "code93":
+                            symbology = .code93
+                        case "jan8", "ean8":
+                            symbology = .jan8
+                        case "jan13", "ean13":
+                            symbology = .jan13
+                        case "upca":
+                            symbology = .upcA
+                        case "upce":
+                            symbology = .upcE
+                        case "itf":
+                            symbology = .itf
+                        case "nw7", "codabar":
+                            symbology = .nw7
+                        default:
+                            symbology = .code128
+                        }
+                        
+                        // Scale barcode for mcLabel2 to match text magnification
+                        let scaledBarcodeHeight = Double(barcodeHeight_stored) * Double(textMagnification.height)
+                        let barcodeBarDots = textMagnification.width  // Scale bar width to match text width
+                        
+                        let barcodeParam = StarXpandCommand.Printer.BarcodeParameter(content: barcodeContent, symbology: symbology)
+                            .setHeight(scaledBarcodeHeight)
+                            .setBarDots(barcodeBarDots)
+                            .setPrintHRI(barcodePrintHRI_stored)
+                        
+                        _ = printerBuilder
+                            .styleAlignment(.center)
+                            .actionPrintBarcode(barcodeParam)
+                            .styleAlignment(.left)
+                        
+                        print("DEBUG: Barcode command added at bottom (height=\(scaledBarcodeHeight)mm, barDots=\(barcodeBarDots))")
+                    }
+                    
+                } else if graphicsOnly {
+                    // Only render a body image for graphics-only models (e.g. TSP100IIIW)
+                    // Label printers (TSP100SK) and receipt printers support native text commands
                     if !trimmedBody.isEmpty,
                        let textImage = createTextImage(text: content, fontSize: 24, imageWidth: CGFloat(targetDots)),
                        let safeText = ensureVisibleImage(textImage, targetWidth: targetDots) {
+                        print("DEBUG: Rendering body as image for graphics-only printer")
                         let param = StarXpandCommand.Printer.ImageParameter(image: safeText, width: targetDots)
                         _ = printerBuilder.actionPrintImage(param)
                         _ = printerBuilder.actionFeedLine(2)
                     } else {
                         // Provide a small feed for bottom margin consistency when skipping body.
+                        print("DEBUG: Skipping body content (empty or image creation failed)")
                         _ = printerBuilder.actionFeedLine(1)
                     }
                 } else {
-                    _ = printerBuilder.actionPrintText(content)
+                    print("DEBUG: Rendering body as text")
+                    // For label printers, center the text content
+                    if labelPrinter {
+                        _ = printerBuilder
+                            .styleAlignment(.center)
+                            .actionPrintText(content)
+                            .styleAlignment(.left)
+                    } else {
+                        _ = printerBuilder.actionPrintText(content)
+                    }
                     _ = printerBuilder.actionFeedLine(2)
+                    
+                    // Print barcode for non-label receipts
+                    if hasBarcodeData && !labelPrinter {
+                        print("DEBUG: Printing barcode for receipt: content=\(barcodeContent)")
+                        
+                        let symbology: StarXpandCommand.Printer.BarcodeSymbology
+                        switch barcodeSymbology_stored.lowercased() {
+                        case "code128":
+                            symbology = .code128
+                        case "code39":
+                            symbology = .code39
+                        case "code93":
+                            symbology = .code93
+                        case "jan8", "ean8":
+                            symbology = .jan8
+                        case "jan13", "ean13":
+                            symbology = .jan13
+                        case "upca":
+                            symbology = .upcA
+                        case "upce":
+                            symbology = .upcE
+                        case "itf":
+                            symbology = .itf
+                        case "nw7", "codabar":
+                            symbology = .nw7
+                        default:
+                            symbology = .code128
+                        }
+                        
+                        let barcodeParam = StarXpandCommand.Printer.BarcodeParameter(content: barcodeContent, symbology: symbology)
+                            .setHeight(Double(barcodeHeight_stored))
+                            .setPrintHRI(barcodePrintHRI_stored)
+                        
+                        _ = printerBuilder
+                            .styleAlignment(.center)
+                            .actionPrintBarcode(barcodeParam)
+                            .styleAlignment(.left)
+                    }
                 }
 
-                _ = builder.addDocument(StarXpandCommand.DocumentBuilder()
-                                            .addPrinter(printerBuilder.actionCut(.partial)))
+                // Build document - DO NOT use settingPrintableArea() as it permanently changes printer memory!
+                // We already calculated targetDots based on printableAreaMm for our rendering
+                let docBuilder = StarXpandCommand.DocumentBuilder()
+                // Let the printer use its own configured printable area
+                _ = builder.addDocument(docBuilder.addPrinter(printerBuilder.actionCut(.partial)))
                 
                 let commands = builder.getCommands()
                 print("Generated commands: \(commands)")
@@ -809,10 +1055,15 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             do {
                 let status = try await printer?.getStatus()
                 
-                let statusMap: [String: Any] = [
+                var statusMap: [String: Any] = [
                     "isOnline": !(status?.hasError ?? true),
                     "status": (status?.hasError ?? true) ? "error" : "ready"
                 ]
+                
+                // Add paperPresent if available (for label printers with paper hold)
+                if let paperPresent = status?.detail.paperPresent {
+                    statusMap["paperPresent"] = paperPresent
+                }
                 
                 DispatchQueue.main.async {
                     result(statusMap)
@@ -937,8 +1188,85 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         }
     }
     
+    // Helper: create a barcode image using iOS Core Image
+    private func createBarcodeImage(content: String, symbology: String, width: CGFloat, height: CGFloat) -> UIImage? {
+        // Map symbology to CIFilter name
+        let filterName: String
+        switch symbology.lowercased() {
+        case "code128":
+            filterName = "CICode128BarcodeGenerator"
+        case "qr", "qrcode":
+            filterName = "CIQRCodeGenerator"
+        case "pdf417":
+            filterName = "CIPDF417BarcodeGenerator"
+        case "aztec":
+            filterName = "CIAztecCodeGenerator"
+        default:
+            filterName = "CICode128BarcodeGenerator"  // Default to CODE128
+        }
+        
+        guard let filter = CIFilter(name: filterName) else {
+            print("DEBUG: Failed to create barcode filter: \(filterName)")
+            return nil
+        }
+        
+        guard let data = content.data(using: .ascii) else {
+            print("DEBUG: Failed to convert barcode content to ASCII")
+            return nil
+        }
+        
+        filter.setValue(data, forKey: "inputMessage")
+        
+        // For CODE128, we can set inputQuietSpace to reduce/eliminate margins
+        if filterName == "CICode128BarcodeGenerator" {
+            filter.setValue(0.0, forKey: "inputQuietSpace")  // Minimum quiet zone
+        }
+        
+        guard let ciImage = filter.outputImage else {
+            print("DEBUG: Failed to generate barcode CIImage")
+            return nil
+        }
+        
+        // Scale the barcode to desired size
+        let scaleX = width / ciImage.extent.width
+        let scaleY = height / ciImage.extent.height
+        let transformedImage = ciImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        
+        // Convert to UIImage
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(transformedImage, from: transformedImage.extent) else {
+            print("DEBUG: Failed to create CGImage from barcode")
+            return nil
+        }
+        
+        let barcodeImage = UIImage(cgImage: cgImage)
+        print("DEBUG: Generated barcode image - size: \(barcodeImage.size.width)x\(barcodeImage.size.height)")
+        return barcodeImage
+    }
+    
     // Helper: create an image from text with adjustable font/width
     private func createTextImage(text: String, fontSize: CGFloat, imageWidth: CGFloat = 576) -> UIImage? {
+        print("DEBUG createTextImage: Original text = '\(text)'")
+        // Filter out barcode placeholder lines (lines that are mostly pipe characters)
+        let filteredText = text.components(separatedBy: "\n")
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Keep empty lines
+                if trimmed.isEmpty { return true }
+                
+                let pipeCount = trimmed.filter { $0 == "|" }.count
+                let totalChars = trimmed.count
+                // Skip lines that are more than 50% pipe characters (barcode placeholders)
+                let isPipeLine = Double(pipeCount) / Double(totalChars) >= 0.5
+                if isPipeLine {
+                    print("DEBUG createTextImage: Filtering out pipe line: '\(trimmed)' (pipes: \(pipeCount)/\(totalChars))")
+                }
+                return !isPipeLine
+            }
+            .joined(separator: "\n")
+        
+        print("DEBUG createTextImage: Filtered text = '\(filteredText)' (Original: \(text.count) chars, Filtered: \(filteredText.count) chars)")
+        
         let font = UIFont.systemFont(ofSize: fontSize)
         let textColor = UIColor.black
         let backgroundColor = UIColor.white
@@ -952,15 +1280,15 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             .paragraphStyle: paragraphStyle
         ]
 
-        let bounds = CGSize(width: imageWidth - 40, height: CGFloat.greatestFiniteMagnitude)
-        let textSize = text.boundingRect(
+        let bounds = CGSize(width: imageWidth - 10, height: CGFloat.greatestFiniteMagnitude)
+        let textSize = filteredText.boundingRect(
             with: bounds,
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: textAttributes,
             context: nil
         ).size
 
-        let imageHeight = max(textSize.height + 40, 100)
+        let imageHeight = textSize.height + 10  // Minimal padding - just 5px top and bottom
         let imageSize = CGSize(width: imageWidth, height: imageHeight)
 
         UIGraphicsBeginImageContextWithOptions(imageSize, true, 1.0)
@@ -971,8 +1299,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         context.setFillColor(backgroundColor.cgColor)
         context.fill(CGRect(origin: .zero, size: imageSize))
 
-        let textRect = CGRect(x: 20, y: 20, width: imageWidth - 40, height: textSize.height)
-        text.draw(in: textRect, withAttributes: textAttributes)
+        let textRect = CGRect(x: 5, y: 5, width: imageWidth - 10, height: textSize.height)  // Just 5px padding all around
+        filteredText.draw(in: textRect, withAttributes: textAttributes)
 
         guard let image = UIGraphicsGetImageFromCurrentImageContext() else {
             UIGraphicsEndImageContext()
