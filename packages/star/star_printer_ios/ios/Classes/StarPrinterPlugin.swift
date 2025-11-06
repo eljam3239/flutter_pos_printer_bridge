@@ -56,8 +56,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let name = String(describing: model).lowercased()
         let isLabel = name.contains("mc_label2") || name.contains("mc-label2") || 
                name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk") ||
-               name.contains("mpop") ||  // mPOP can also print labels
-               name.contains("tsp100iv")  // TSP100IV can print labels too
+               name.contains("mpop")  // mPOP can also print labels
+        // DO NOT include regular tsp100iv - it's a receipt printer!
         print("DEBUG: isLabelPrinter check for '\(name)': \(isLabel)")
         return isLabel
     }
