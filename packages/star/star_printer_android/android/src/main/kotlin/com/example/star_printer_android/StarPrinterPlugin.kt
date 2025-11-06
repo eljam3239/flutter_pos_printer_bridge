@@ -393,6 +393,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val imageBlock = layout?.get("image") as? Map<*, *>
         val details = layout?.get("details") as? Map<*, *>
   val items = layout?.get("items") as? List<*>
+  val barcodeBlock = layout?.get("barcode") as? Map<*, *>
 
         val headerTitle = (header?.get("title") as? String)?.trim().orEmpty()
         val headerFontSize = (header?.get("fontSize") as? Number)?.toInt() ?: 32
@@ -409,24 +410,94 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val receiptNum = (details?.get("receiptNum") as? String)?.trim().orEmpty()
         val lane = (details?.get("lane") as? String)?.trim().orEmpty()
         val footer = (details?.get("footer") as? String)?.trim().orEmpty()
+        
+        // Barcode
+        val barcodeContent = (barcodeBlock?.get("content") as? String)?.trim().orEmpty()
+        val barcodeSymbology = (barcodeBlock?.get("symbology") as? String)?.trim()?.lowercase() ?: "code128"
+        val barcodeHeight = (barcodeBlock?.get("height") as? Number)?.toInt() ?: 50
+        val barcodePrintHRI = (barcodeBlock?.get("printHRI") as? Boolean) ?: true
+        
+        // Label template fields (from details, same as iOS)
+        val category = (details?.get("category") as? String)?.trim().orEmpty()
+        val size = (details?.get("size") as? String)?.trim().orEmpty()
+        val color = (details?.get("color") as? String)?.trim().orEmpty()
+        val labelPrice = (details?.get("price") as? String)?.trim().orEmpty()
+        val layoutType = (details?.get("layoutType") as? String)?.trim().orEmpty()
+        val printableAreaMm = (details?.get("printableAreaMm") as? Number)?.toDouble() ?: 51.0  // Default to 58mm paper
+        
+        println("DEBUG: Received printableAreaMm from Dart: ${details?.get("printableAreaMm")}, using: $printableAreaMm")
+        println("DEBUG: Barcode settings from Dart - content=$barcodeContent, height=$barcodeHeight, symbology=$barcodeSymbology")
+        println("DEBUG: Label layout - type=$layoutType, printableArea=${printableAreaMm}mm")
+        println("DEBUG: Label fields - category='$category', size='$size', color='$color', price='$labelPrice'")
 
   val graphicsOnly = isGraphicsOnlyPrinter()
 
   val printerBuilder = PrinterBuilder()
+  
+  // Check if this is a label print job (has label-specific fields)
+  val hasLabelFields = category.isNotEmpty() || size.isNotEmpty() || color.isNotEmpty() || labelPrice.isNotEmpty()
+  
   // Compute dynamic printable characteristics to match iOS parity
-  val targetDots = currentPrintableWidthDots()
-  val fullWidthMm = currentPrintableWidthMm()
-  val cpl = currentColumnsPerLine()
+  val labelPrinter = isLabelPrinter()
+  val useLabelMode = (labelPrinter || hasLabelFields) && printableAreaMm > 0
+  val targetDots: Int
+  val fullWidthMm: Double
+  
+  // Detect printer DPI and magnification needs
+  var textMagnificationWidth = 1
+  var textMagnificationHeight = 1
+  
+  if (useLabelMode) {
+    // Detect printer DPI based on model
+    val dotsPerMm: Double
+    val modelName = printer?.information?.model?.name?.lowercase() ?: ""
+    if (modelName.contains("mc_label2") || modelName.contains("mc-label2")) {
+      dotsPerMm = 11.8  // mcLabel2 is 300 DPI (300/25.4 = 11.8 dots/mm)
+      textMagnificationWidth = 2
+      textMagnificationHeight = 2  // Scale text 2x to match TSP100IVSK visual size
+      println("DEBUG: Detected mcLabel2 - using 300 DPI (11.8 dots/mm) with 2x text magnification")
+    } else {
+      dotsPerMm = 8.0   // TSP100IVSK is 203 DPI (203/25.4 = 8.0 dots/mm)
+      println("DEBUG: Detected TSP100IVSK or similar - using 203 DPI (8 dots/mm)")
+    }
+    
+    targetDots = (printableAreaMm * dotsPerMm).toInt()
+    fullWidthMm = printableAreaMm
+    println("DEBUG: Using label printable area: ${printableAreaMm}mm = $targetDots dots")
+  } else {
+    // Use auto-detected width for receipts
+    targetDots = currentPrintableWidthDots()
+    fullWidthMm = currentPrintableWidthMm()
+    println("DEBUG: Using auto-detected width: ${fullWidthMm}mm = $targetDots dots")
+  }
+  
+  // Use targetDots for text width calculation in label mode (matching iOS logic)
+  val cpl = if (useLabelMode) (targetDots / 12.0).toInt() else currentColumnsPerLine()
+  println("DEBUG: Text width calculation - useLabelMode=$useLabelMode, cpl=$cpl (targetDots=$targetDots)")
 
-        // 1) Header as image for consistent layout
+        // 1) Header: print as bold text instead of image for labels
         if (headerTitle.isNotEmpty()) {
-          val headerBitmap = createHeaderBitmap(headerTitle, headerFontSize, targetDots)
-          if (headerBitmap != null) {
+          if (useLabelMode) {
+            // For labels, use bold text instead of image
             printerBuilder
               .styleAlignment(Alignment.Center)
-              .actionPrintImage(ImageParameter(headerBitmap, targetDots))
+              .styleBold(true)
+              .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+              .actionPrintText("$headerTitle\n")
+              .styleMagnification(MagnificationParameter(1, 1))
+              .styleBold(false)
               .styleAlignment(Alignment.Left)
             if (headerSpacing > 0) printerBuilder.actionFeedLine(headerSpacing)
+          } else {
+            // For receipts, use image
+            val headerBitmap = createHeaderBitmap(headerTitle, headerFontSize, targetDots)
+            if (headerBitmap != null) {
+              printerBuilder
+                .styleAlignment(Alignment.Center)
+                .actionPrintImage(ImageParameter(headerBitmap, targetDots))
+                .styleAlignment(Alignment.Left)
+              if (headerSpacing > 0) printerBuilder.actionFeedLine(headerSpacing)
+            }
           }
         }
 
@@ -448,12 +519,49 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           }
         }
 
-  // 2.5) Details block (we will later inject items between ruled lines)
+  // 2.5) Barcode printing for receipts (labels print barcode at bottom in template)
+        if (barcodeContent.isNotEmpty() && !(useLabelMode && hasLabelFields)) {
+          println("DEBUG: Printing barcode (receipt mode): content=$barcodeContent, symbology=$barcodeSymbology, useLabelMode=$useLabelMode")
+          
+          // Map symbology string to StarXpand BarcodeSymbology enum
+          val symbology = when (barcodeSymbology) {
+            "code128" -> BarcodeSymbology.Code128
+            "code39" -> BarcodeSymbology.Code39
+            "code93" -> BarcodeSymbology.Code93
+            "jan8", "ean8" -> BarcodeSymbology.Jan8
+            "jan13", "ean13" -> BarcodeSymbology.Jan13
+            "nw7", "codabar" -> BarcodeSymbology.NW7
+            else -> BarcodeSymbology.Code128  // Default to CODE128
+          }
+          
+          // Create barcode parameter
+          // For narrow label printers, use minimal bar width (2 dots) to fit within print area
+          val barDots = if (labelPrinter) 2 else 3
+          val barcodeParam = BarcodeParameter(barcodeContent, symbology)
+            .setBarDots(barDots)
+            .setHeight(barcodeHeight.toDouble())
+            .setPrintHri(barcodePrintHRI)  // Always print HRI in receipt mode too
+          
+          println("DEBUG: Barcode parameters - barDots=$barDots, height=$barcodeHeight, printableWidth=$targetDots")
+          
+          // Print barcode centered
+          printerBuilder
+            .styleAlignment(Alignment.Center)
+            .actionPrintBarcode(barcodeParam)
+            .styleAlignment(Alignment.Left)
+          
+          printerBuilder.actionFeedLine(1)  // Add spacing after barcode
+          println("DEBUG: Barcode command added to printer builder")
+        }
+
+  // 2.6) Details block (we will later inject items between ruled lines)
         val hasAnyDetails = listOf(locationText, dateText, timeText, cashier, receiptNum, lane, footer).any { it.isNotEmpty() }
         if (hasAnyDetails) {
-          if (graphicsOnly || isLabelPrinter()) {
-            // Force label printers to a 576px canvas to ensure full-width usage like iOS
-            val detailsCanvas = if (isLabelPrinter()) 576 else targetDots
+          // Only use image rendering for graphics-only printers (like iOS)
+          // Label printers (mPOP, TSP100SK) support native text commands
+          if (graphicsOnly) {
+            // Force label printers to use targetDots for proper width like iOS
+            val detailsCanvas = targetDots
             val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, detailsCanvas)
             if (detailsBmp != null) {
               printerBuilder.actionPrintImage(ImageParameter(detailsBmp, detailsCanvas)).actionFeedLine(1)
@@ -482,6 +590,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
             printerBuilder.actionPrintText("$right2\n", rightParam)
             // Gap then first ruled line
             printerBuilder.actionFeedLine(1)
+            println("DEBUG: Printing ruled line with fullWidthMm=$fullWidthMm")
             printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
 
             // Inject item lines (text path only here). Each item: "Q x Name" left, price right.
@@ -517,23 +626,195 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           }
         }
 
-        // 3) Body/content
+        // 3) Body content or Label template
         val trimmedBody = content.trim()
-        if (graphicsOnly) {
+        
+        println("DEBUG: Rendering body content - useLabelMode=$useLabelMode, graphicsOnly=$graphicsOnly, hasLabelFields=$hasLabelFields, contentLength=${trimmedBody.length}")
+        
+        if (useLabelMode && hasLabelFields) {
+          // Label template rendering
+          println("DEBUG: Rendering label template with layout: $layoutType")
+          
+          when (layoutType) {
+            "vertical_centered" -> {
+              // 38mm paper (34.5mm printable) - everything vertical and centered
+              if (category.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$category\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleAlignment(Alignment.Left)
+              }
+              
+              if (labelPrice.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleBold(true)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$$labelPrice\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleBold(false)
+                  .styleAlignment(Alignment.Left)
+              }
+              // Size and Color on one line, centered (no pipes, no magnification)
+              val combinedLine = buildString {
+                if (size.isNotEmpty()) append(size)
+                if (color.isNotEmpty()) {
+                  if (isNotEmpty()) append("  ")
+                  append(color)
+                }
+              }
+              
+              if (combinedLine.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .actionPrintText("$combinedLine\n")
+                  .styleAlignment(Alignment.Left)
+              }
+            }
+            "mixed" -> {
+              // 58mm paper (51mm printable) - optimized horizontal layout
+              // Category centered below header (skip if already in header)
+              if (category.isNotEmpty() && category != headerTitle) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$category\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleAlignment(Alignment.Left)
+              }
+              
+              // Price centered on its own line (bold)
+              if (labelPrice.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleBold(true)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$$labelPrice\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleBold(false)
+                  .styleAlignment(Alignment.Left)
+              }
+              
+              // Size and Color on one line, centered (no pipes, no magnification)
+              val combinedLine = buildString {
+                if (size.isNotEmpty()) append(size)
+                if (color.isNotEmpty()) {
+                  if (isNotEmpty()) append("  ")
+                  append(color)
+                }
+              }
+              
+              if (combinedLine.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .actionPrintText("$combinedLine\n")
+                  .styleAlignment(Alignment.Left)
+              }
+            }
+            else -> {
+              // 80mm paper (72mm printable) - same layout as 58mm
+              // Category centered below header (skip if already in header)
+              if (category.isNotEmpty() && category != headerTitle) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$category\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleAlignment(Alignment.Left)
+              }
+              
+              // Price centered on its own line (bold)
+              if (labelPrice.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .styleBold(true)
+                  .styleMagnification(MagnificationParameter(textMagnificationWidth, textMagnificationHeight))
+                  .actionPrintText("$$labelPrice\n")
+                  .styleMagnification(MagnificationParameter(1, 1))
+                  .styleBold(false)
+                  .styleAlignment(Alignment.Left)
+              }
+              
+              // Size and Color on one line, centered (no pipes, no magnification)
+              val combinedLine = buildString {
+                if (size.isNotEmpty()) append(size)
+                if (color.isNotEmpty()) {
+                  if (isNotEmpty()) append("  ")
+                  append(color)
+                }
+              }
+              
+              if (combinedLine.isNotEmpty()) {
+                printerBuilder
+                  .styleAlignment(Alignment.Center)
+                  .actionPrintText("$combinedLine\n")
+                  .styleAlignment(Alignment.Left)
+              }
+            }
+          }
+          
+          // Print barcode at the bottom for labels
+          if (barcodeContent.isNotEmpty()) {
+            println("DEBUG: Printing barcode at bottom: content=$barcodeContent, symbology=$barcodeSymbology, height=$barcodeHeight")
+            
+            val symbology = when (barcodeSymbology) {
+              "code128" -> BarcodeSymbology.Code128
+              "code39" -> BarcodeSymbology.Code39
+              "code93" -> BarcodeSymbology.Code93
+              "jan8", "ean8" -> BarcodeSymbology.Jan8
+              "jan13", "ean13" -> BarcodeSymbology.Jan13
+              "nw7", "codabar" -> BarcodeSymbology.NW7
+              else -> BarcodeSymbology.Code128
+            }
+            
+            // Scale barcode for mcLabel2 to match text magnification
+            val scaledBarcodeHeight = barcodeHeight.toDouble() * textMagnificationHeight
+            val barcodeBarDots = textMagnificationWidth  // Scale bar width to match text width
+            
+            val barcodeParam = BarcodeParameter(barcodeContent, symbology)
+              .setBarDots(barcodeBarDots)
+              .setPrintHri(barcodePrintHRI)
+              .setHeight(scaledBarcodeHeight)
+            
+            printerBuilder
+              .styleAlignment(Alignment.Center)
+              .actionPrintBarcode(barcodeParam)
+              .styleAlignment(Alignment.Left)
+            
+            println("DEBUG: Barcode command added at bottom (height=${scaledBarcodeHeight}mm, barDots=$barcodeBarDots)")
+          }
+          
+          // Set printable area for label
+          if (printableAreaMm > 0) {
+            println("DEBUG: Set label printable area to ${printableAreaMm}mm")
+          }
+        } else if (graphicsOnly || labelPrinter) {
           // Skip generating an empty body bitmap to prevent a blank rectangle artifact
           // on graphics-only printers (e.g., TSP100III). Only render if there is real content.
+          // Label printers (like TSP100SK) also need centered image rendering.
           if (trimmedBody.isNotEmpty()) {
+            println("DEBUG: Rendering body as image for label printer")
             val bodyBitmap = createTextBitmap(content, targetDots)
             printerBuilder.actionPrintImage(ImageParameter(bodyBitmap, targetDots)).actionFeedLine(2)
           } else {
             // Light feed to keep a small margin before cut for visual consistency.
+            println("DEBUG: Skipping body content (empty)")
             printerBuilder.actionFeedLine(1)
           }
         } else {
+          println("DEBUG: Rendering body as text")
           printerBuilder.actionPrintText(content).actionFeedLine(2)
         }
 
-        builder.addDocument(DocumentBuilder().addPrinter(printerBuilder.actionCut(CutType.Partial)))
+        // Build document - DO NOT use settingPrintableArea() as it permanently changes printer memory!
+        // We already calculated targetDots based on printableAreaMm for our rendering
+        val documentBuilder = DocumentBuilder()
+        // Let the printer use its own configured printable area
+        documentBuilder.addPrinter(printerBuilder.actionCut(CutType.Partial))
+        
+        builder.addDocument(documentBuilder)
         
         val commands = builder.getCommands()
         printer?.printAsync(commands)?.await()
@@ -559,10 +840,13 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       try {
         val status = printer?.getStatusAsync()?.await()
         
-        val statusMap = mapOf(
+        val statusMap = mutableMapOf<String, Any?>(
           "isOnline" to (status != null),
           "status" to "OK"
         )
+        
+        // Note: paperPresent is available on iOS but not consistently exposed in Android StarIO10 SDK
+        // Leaving this out for now on Android
         
         withContext(Dispatchers.Main) {
           result.success(statusMap)
@@ -737,11 +1021,15 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 
-  // Heuristic: determine if current model is a label printer (e.g., mC-Label2)
+  // Heuristic: determine if current model is a label printer (e.g., mC-Label2, TSP100SK)
   private fun isLabelPrinter(): Boolean {
     return try {
       val modelStr = printer?.information?.model?.toString() ?: return false
-      modelStr.lowercase().contains("label")
+      val ms = modelStr.lowercase()
+      val isLabel = ms.contains("label") || ms.contains("tsp100iv_sk") || ms.contains("tsp100sk") || ms.contains("_sk") || ms.contains("mpop")
+      // DO NOT include regular tsp100iv - it's a receipt printer!
+      println("DEBUG: isLabelPrinter check for '$ms': $isLabel")
+      isLabel
     } catch (_: Exception) { false }
   }
 
@@ -749,15 +1037,28 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   private fun currentPrintableWidthDots(): Int {
     return try {
       val ms = (printer?.information?.model?.toString() ?: "").lowercase()
-      when {
+      println("DEBUG: Printer model for width calculation: $ms")
+      
+      // ADJUST THIS VALUE if labels are still being cut off:
+      // - If content is cut off on right: decrease this number (try 220, 200, etc.)
+      // - If content appears too narrow with margins: increase this number (try 260, 280, etc.)
+      val tsp100skWidth = 240  // Optimized for TSP100SK label printing
+      
+      val width = when {
         // Label printers - render at 576 and let device scale if needed
         ms.contains("label") -> 576
+        // TSP100SK is a 2" label printer but actual printable width appears much narrower
+        ms.contains("tsp100iv_sk") || ms.contains("tsp100sk") || ms.contains("_sk") -> {
+          println("DEBUG: TSP100SK detected, using $tsp100skWidth dots width")
+          tsp100skWidth
+        }
         // 58mm class
         ms.contains("mpop") || ms.contains("mcp2") -> 384
         // 80mm class
         ms.contains("mcp3") || ms.contains("tsp100") || ms.contains("tsp650") -> 576
         else -> 576
       }
+      width
     } catch (_: Exception) { 576 }
   }
 
@@ -817,6 +1118,27 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   // Overload that renders text to a specified width (in dots)
   private fun createTextBitmap(text: String, width: Int): Bitmap {
+    println("DEBUG createTextBitmap: Original text = '$text'")
+    // Filter out barcode placeholder lines (lines that are mostly pipe characters)
+    val filteredText = text.lines()
+      .filter { line ->
+        val trimmed = line.trim()
+        // Keep empty lines
+        if (trimmed.isEmpty()) return@filter true
+        
+        val pipeCount = trimmed.count { it == '|' }
+        val totalChars = trimmed.length
+        // Skip lines that are more than 50% pipe characters (barcode placeholders)
+        val isPipeLine = (pipeCount.toDouble() / totalChars.toDouble()) >= 0.5
+        if (isPipeLine) {
+          println("DEBUG createTextBitmap: Filtering out pipe line: '$trimmed' (pipes: $pipeCount/$totalChars)")
+        }
+        !isPipeLine
+      }
+      .joinToString("\n")
+    
+    println("DEBUG createTextBitmap: Filtered text = '$filteredText' (Original: ${text.length} chars, Filtered: ${filteredText.length} chars)")
+    
     val w = width.coerceIn(8, 576)
     val padding = 20
 
@@ -830,17 +1152,17 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
     val layout: StaticLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
       StaticLayout.Builder
-        .obtain(text, 0, text.length, textPaint, contentWidth)
-        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+        .obtain(filteredText, 0, filteredText.length, textPaint, contentWidth)
+        .setAlignment(Layout.Alignment.ALIGN_CENTER)
         .setIncludePad(false)
         .build()
     } else {
       @Suppress("DEPRECATION")
       StaticLayout(
-        text,
+        filteredText,
         textPaint,
         contentWidth,
-        Layout.Alignment.ALIGN_NORMAL,
+        Layout.Alignment.ALIGN_CENTER,
         1.0f,
         0.0f,
         false
