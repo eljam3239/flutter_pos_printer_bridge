@@ -636,30 +636,45 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _printStarReceipt() async {
     print('DEBUG: Print receipt button pressed');
     
-    print('DEBUG: Creating print job...');
-    // Build structured layout settings to be interpreted by native layers
-    final layoutSettings = {
-      'layout': {
-        'header': {
-          'title': _headerTitle,
-          'align': 'center',
-          'fontSize': _headerFontSize,
-          'spacingLines': _headerSpacingLines,
-        },
-        'details': {
-          'locationText': _locationText,
-          'date': _date,
-          'time': _time,
-          'cashier': _cashier,
-          'receiptNum': _receiptNum,
-          'lane': _lane,
-          'footer': _footer,
-        },
-        'items': List.generate(_itemRepeat, (index) => {
-          'quantity': _itemQuantity,
-          'name': _itemName,
-          'price': _itemPrice,
-        }),
+    try {
+      print('DEBUG: Creating print job...');
+      
+      // Calculate printable area for receipts too (same logic as labels)
+      double printableAreaMm;
+      if (_labelPaperWidthMm == 38) {
+        printableAreaMm = 34.5;
+      } else if (_labelPaperWidthMm == 58) {
+        printableAreaMm = 48.0;
+      } else {
+        printableAreaMm = 72.0;
+      }
+      
+      print('DEBUG: Receipt - _labelPaperWidthMm = $_labelPaperWidthMm, printableAreaMm = $printableAreaMm');
+      
+      // Build structured layout settings to be interpreted by native layers
+      final layoutSettings = {
+        'layout': {
+          'header': {
+            'title': _headerTitle,
+            'align': 'center',
+            'fontSize': _headerFontSize,
+            'spacingLines': _headerSpacingLines,
+          },
+          'details': {
+            'locationText': _locationText,
+            'date': _date,
+            'time': _time,
+            'cashier': _cashier,
+            'receiptNum': _receiptNum,
+            'lane': _lane,
+            'footer': _footer,
+            'printableAreaMm': printableAreaMm,  // Add printable area for receipts too
+          },
+          'items': List.generate(_itemRepeat, (index) => {
+            'quantity': _itemQuantity,
+            'name': _itemName,
+            'price': _itemPrice,
+          }),
         'image': _logoBase64 == null
             ? null
             : {
@@ -669,38 +684,48 @@ class _MyHomePageState extends State<MyHomePage> {
                 'width': _imageWidthPx,
                 'spacingLines': _imageSpacingLines,
               },
-      },
-    };
+        },
+      };
 
-    final printJob = PrintJob(
-      content: '',
-      settings: layoutSettings,
-    );
-    
-    print('DEBUG: Sending print job to printer...');
-    await StarPrinter.printReceipt(printJob);
-    
-    print('DEBUG: Print job completed successfully');
-    
-    // Optionally open cash drawer after successful print
-    if (_openDrawerAfterPrint && _isConnected) {
-      try {
-        print('DEBUG: Auto-opening cash drawer after print...');
-        await StarPrinter.openCashDrawer();
-        print('DEBUG: Auto cash drawer opened successfully');
-      } catch (drawerError) {
-        print('DEBUG: Auto cash drawer failed: $drawerError');
-        // Don't fail the whole operation if drawer fails
+      final printJob = PrintJob(
+        content: '',
+        settings: layoutSettings,
+      );
+      
+      print('DEBUG: Sending print job to printer...');
+      await StarPrinter.printReceipt(printJob);
+      
+      print('DEBUG: Print job completed successfully');
+      
+      // Optionally open cash drawer after successful print
+      if (_openDrawerAfterPrint && _isConnected) {
+        try {
+          print('DEBUG: Auto-opening cash drawer after print...');
+          await StarPrinter.openCashDrawer();
+          print('DEBUG: Auto cash drawer opened successfully');
+        } catch (drawerError) {
+          print('DEBUG: Auto cash drawer failed: $drawerError');
+          // Don't fail the whole operation if drawer fails
+        }
       }
+      
+      print('DEBUG: Print job completed successfully');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_openDrawerAfterPrint 
+            ? 'Star print job sent and drawer opened' 
+            : 'Star print job sent successfully')),
+      );
+    } catch (e) {
+      print('DEBUG: Print failed with error: $e');
+      print('DEBUG: Error type: ${e.runtimeType}');
+      print('DEBUG: Error details: ${e.toString()}');
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Print failed: $e')),
+      );
     }
-    
-    print('DEBUG: Print job completed successfully');
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_openDrawerAfterPrint 
-          ? 'Star print job sent and drawer opened' 
-          : 'Star print job sent successfully')),
-    );
   }
 
   Future<void> _printLabel() async {
@@ -718,12 +743,14 @@ class _MyHomePageState extends State<MyHomePage> {
         printableAreaMm = 34.5;
         layoutType = 'vertical_centered';  // Everything vertical and centered for narrow labels
       } else if (_labelPaperWidthMm == 58) {
-        printableAreaMm = 51.0;
+        printableAreaMm = 48.0;
         layoutType = 'mixed';  // Mixed layout with some horizontal elements
       } else {
         printableAreaMm = 72.0;
         layoutType = 'horizontal';  // Full horizontal layout for wide labels
       }
+      
+      print('DEBUG: _labelPaperWidthMm = $_labelPaperWidthMm, printableAreaMm = $printableAreaMm');
       
       // All centered content for narrow labels
       final productName = _itemName.isNotEmpty ? _itemName : 'PRODUCT NAME';
@@ -1363,24 +1390,54 @@ class _MyHomePageState extends State<MyHomePage> {
             
             // Star label printing controls
             if (_selectedBrand == PrinterBrand.star) ...[
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Label Paper Width: '),
-                  Expanded(
-                    child: Slider(
-                      value: _labelPaperWidthMm.toDouble(),
-                      min: 38,
-                      max: 80,
-                      divisions: 2,
-                      label: '${_labelPaperWidthMm}mm',
-                      onChanged: (double value) {
-                        setState(() {
-                          _labelPaperWidthMm = value.round();
-                        });
-                      },
-                    ),
+                  const Text('Label Paper Width:'),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: RadioListTile<int>(
+                          title: const Text('38mm'),
+                          value: 38,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value!;
+                            });
+                          },
+                          dense: true,
+                        ),
+                      ),
+                      Expanded(
+                        child: RadioListTile<int>(
+                          title: const Text('58mm'),
+                          value: 58,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value!;
+                            });
+                          },
+                          dense: true,
+                        ),
+                      ),
+                      Expanded(
+                        child: RadioListTile<int>(
+                          title: const Text('80mm'),
+                          value: 80,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value!;
+                            });
+                          },
+                          dense: true,
+                        ),
+                      ),
+                    ],
                   ),
-                  Text('${_labelPaperWidthMm}mm'),
                 ],
               ),
               Row(

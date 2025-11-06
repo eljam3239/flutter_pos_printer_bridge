@@ -523,6 +523,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let labelPrice = (details?["price"] as? String) ?? ""
     let layoutType = (details?["layoutType"] as? String) ?? "mixed"  // vertical_centered, mixed, or horizontal
     let printableAreaMm = (details?["printableAreaMm"] as? Double) ?? 51.0  // Default to 58mm paper
+    
+    print("DEBUG: Received printableAreaMm from Dart: \(details?["printableAreaMm"] as? Double ?? 999.0), using: \(printableAreaMm)")
     // Barcode
     let barcodeContent = (barcodeBlock?["content"] as? String) ?? ""
     let barcodeSymbology = (barcodeBlock?["symbology"] as? String) ?? "code128"
@@ -718,7 +720,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                         // Line: left date/time, right cashier
                         let left1 = "\(dateText) \(timeText)"
                         let right1 = cashier.isEmpty ? "" : "Cashier: \(cashier)"
-                        let totalCPL = currentColumnsPerLine()
+                        let totalCPL = useLabelMode ? Int(Double(targetDots) / 12.0) : currentColumnsPerLine()  // Use targetDots for label mode
                         let leftWidth = max(8, totalCPL / 2)
                         let rightWidth = max(8, totalCPL - leftWidth)
                         let leftParam = StarXpandCommand.Printer.TextParameter().setWidth(leftWidth)

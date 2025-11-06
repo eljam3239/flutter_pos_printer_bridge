@@ -3,11 +3,13 @@ class PrinterStatus {
   final bool isOnline;
   final String status;
   final String? errorMessage;
+  final bool? paperPresent;  // Whether paper is present in the printer (for label printers with paper hold)
 
   const PrinterStatus({
     required this.isOnline,
     required this.status,
     this.errorMessage,
+    this.paperPresent,
   });
 
   factory PrinterStatus.fromMap(Map<String, dynamic> map) {
@@ -15,6 +17,7 @@ class PrinterStatus {
       isOnline: map['isOnline'] ?? false,
       status: map['status'] ?? 'unknown',
       errorMessage: map['errorMessage'],
+      paperPresent: map['paperPresent'],
     );
   }
 
@@ -23,6 +26,7 @@ class PrinterStatus {
       'isOnline': isOnline,
       'status': status,
       'errorMessage': errorMessage,
+      'paperPresent': paperPresent,
     };
   }
 }

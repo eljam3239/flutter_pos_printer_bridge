@@ -5,8 +5,6 @@ import 'dart:io' show Platform;
 import 'package:flutter/services.dart' show rootBundle;
 import 'dart:convert' show base64Encode;
 import 'package:image_picker/image_picker.dart';
-import 'bluetooth_test_widget.dart';
-import 'wired_test_widget.dart';
 
 void main() {
   runApp(const MyApp());
@@ -68,6 +66,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String _printerStatus = 'Unknown';
   String? _selectedPrinter; // Add selected printer tracking
   bool _openDrawerAfterPrint = true; // Option to auto-open drawer after printing
+  
+  // Label printer paper width selector
+  int _labelPaperWidthMm = 58; // Default to 58mm
+  int _labelQuantity = 1; // Number of labels to print
 
   // Receipt layout controls (for integration into POS app)
   String _headerTitle = "Wendy's";
@@ -401,11 +403,177 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _printLabel() async {
+    print('DEBUG: Print label button pressed');
+    
+    try {
+      print('DEBUG: Creating label print job for $_labelQuantity label(s)...');
+      
+      // Calculate printable area based on paper width
+      // 38mm -> 34.5mm printable, 58mm -> 48mm printable, 80mm -> 72mm printable
+      double printableAreaMm;
+      String layoutType;
+      
+      if (_labelPaperWidthMm == 38) {
+        printableAreaMm = 34.5;
+        layoutType = 'vertical_centered';  // Everything vertical and centered for narrow labels
+      } else if (_labelPaperWidthMm == 58) {
+        printableAreaMm = 48.0;
+        layoutType = 'mixed';  // Mixed layout with some horizontal elements
+      } else {
+        printableAreaMm = 72.0;
+        layoutType = 'horizontal';  // Full horizontal layout for wide labels
+      }
+      
+      print('DEBUG: _labelPaperWidthMm = $_labelPaperWidthMm, printableAreaMm = $printableAreaMm');
+      
+      // All centered content for narrow labels
+      final productName = _itemName.isNotEmpty ? _itemName : 'PRODUCT NAME';
+      final category = '';  // or get from a field
+      final price = _itemPrice.isNotEmpty ? _itemPrice : '0.00';
+      final scancode = '0123456789';  // Barcode data
+      final size = 'Small';
+      final color = 'Blush Floral';
+
+      
+      // Label layout based on paper width
+      final labelSettings = {
+        'layout': {
+          'header': {
+            'title': productName,
+            'align': 'center',
+            'fontSize': 40,
+            'spacingLines': 0,
+          },
+          'details': {
+            'category': category,
+            'size': size,
+            'color': color,
+            'price': price,
+            'layoutType': layoutType,  // Tell native code which template to use
+            'printableAreaMm': printableAreaMm,  // Pass printable area to native code
+          },
+          'items': [],
+          'image': null,
+          'barcode': {
+            'content': scancode,
+            'symbology': 'code128',  // Using CODE128 as requested
+            'height': 4,  // Very compact barcode height (90% shorter than default ~50)
+            'printHRI': true,  // Don't print numbers below barcode to save vertical space
+          },
+        },
+      };
+      
+      final labelContent = ''; //'''
+// $productName
+// $qty | Green
+// \$$price
+// ''';
+
+      final printJob = PrintJob(
+        content: labelContent,
+        settings: labelSettings,
+      );
+      
+      bool shownPaperHoldWarning = false;
+      
+      // Print multiple labels
+      for (int i = 0; i < _labelQuantity; i++) {
+        print('DEBUG: Sending label ${i + 1} of $_labelQuantity to printer...');
+        
+        final printStartTime = DateTime.now();
+        
+        try {
+          // Try to print the label
+          await StarPrinter.printReceipt(printJob);
+          
+          final printDuration = DateTime.now().difference(printStartTime);
+          print('DEBUG: Label ${i + 1} completed in ${printDuration.inMilliseconds}ms');
+          
+          // Small delay between prints to prevent buffer overflow
+          if (i < _labelQuantity - 1) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+        } catch (e) {
+          // Check if this is a paper hold error
+          final errorMessage = e.toString().toLowerCase();
+          if (errorMessage.contains('holding paper') || errorMessage.contains('paper hold')) {
+            if (!shownPaperHoldWarning && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Please remove each label after it prints, or disable "Paper Hold" in your Star App settings'),
+                  duration: Duration(seconds: 8),
+                ),
+              );
+              shownPaperHoldWarning = true;
+            }
+            print('DEBUG: Paper hold detected - waiting for user to remove label ${i + 1}');
+            
+            // Keep trying to print this label until it succeeds
+            bool labelPrinted = false;
+            while (!labelPrinted) {
+              await Future.delayed(const Duration(milliseconds: 500));
+              try {
+                await StarPrinter.printReceipt(printJob);
+                labelPrinted = true;
+                print('DEBUG: Label ${i + 1} printed after paper removal');
+              } catch (retryError) {
+                // Still holding, keep waiting
+                if (!retryError.toString().toLowerCase().contains('holding paper')) {
+                  // Different error, rethrow
+                  rethrow;
+                }
+              }
+            }
+            
+            final printDuration = DateTime.now().difference(printStartTime);
+            print('DEBUG: Label ${i + 1} completed in ${printDuration.inMilliseconds}ms (including wait time)');
+            
+            // Small delay between prints
+            if (i < _labelQuantity - 1) {
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+          } else {
+            // Different error, rethrow
+            rethrow;
+          }
+        }
+      }
+      
+      print('DEBUG: All $_labelQuantity label(s) printed successfully');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$_labelQuantity label(s) printed successfully')),
+        );
+      }
+    } catch (e) {
+      print('DEBUG: Label print failed with error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to print label: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _printReceipt() async {
     print('DEBUG: Print receipt button pressed');
     
     try {
       print('DEBUG: Creating print job...');
+      
+      // Calculate printable area for receipts too (same logic as labels)
+      double printableAreaMm;
+      if (_labelPaperWidthMm == 38) {
+        printableAreaMm = 34.5;
+      } else if (_labelPaperWidthMm == 58) {
+        printableAreaMm = 48.0;
+      } else {
+        printableAreaMm = 72.0;
+      }
+      
+      print('DEBUG: Receipt - _labelPaperWidthMm = $_labelPaperWidthMm, printableAreaMm = $printableAreaMm');
+      
       // Build structured layout settings to be interpreted by native layers
       final layoutSettings = {
         'layout': {
@@ -423,6 +591,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 'receiptNum': _receiptNum,
                 'lane': _lane,
                 'footer': _footer,
+                'printableAreaMm': printableAreaMm,  // Add printable area for receipts too
               },
           'items': [
             {
@@ -946,6 +1115,92 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ]),
                     const SizedBox(height: 16),
+                    Text(
+                      'Label Printer Settings',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('How Big Is Your Label Printer Paper?', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Radio<int>(
+                          value: 38,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value ?? 58;
+                            });
+                          },
+                        ),
+                        const Text('38mm (1.5")'),
+                        const SizedBox(width: 16),
+                        Radio<int>(
+                          value: 58,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value ?? 58;
+                            });
+                          },
+                        ),
+                        const Text('58mm (2.25")'),
+                        const SizedBox(width: 16),
+                        Radio<int>(
+                          value: 80,
+                          groupValue: _labelPaperWidthMm,
+                          onChanged: (int? value) {
+                            setState(() {
+                              _labelPaperWidthMm = value ?? 58;
+                            });
+                          },
+                        ),
+                        const Text('80mm (3.15")'),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _labelPaperWidthMm == 38 
+                          ? 'Printable area: 34.5mm (vertical layout, all centered)'
+                          : _labelPaperWidthMm == 58
+                              ? 'Printable area: 48mm (mixed layout)'
+                              : 'Printable area: 72mm (horizontal layout)',
+                      style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Number of Labels to Print:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 100,
+                          child: TextField(
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Quantity',
+                              border: OutlineInputBorder(),
+                            ),
+                            controller: TextEditingController(text: _labelQuantity.toString()),
+                            onChanged: (v) {
+                              final qty = int.tryParse(v) ?? 1;
+                              setState(() => _labelQuantity = qty.clamp(1, 100));
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Slider(
+                            value: _labelQuantity.toDouble(),
+                            min: 1,
+                            max: 20,
+                            divisions: 19,
+                            label: _labelQuantity.toString(),
+                            onChanged: (v) => setState(() => _labelQuantity = v.round()),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
                     Text('Connection Status: ${_isConnected ? "Connected" : "Disconnected"}'),
                     const SizedBox(height: 8),
                     Text('Printer Status: $_printerStatus'),
@@ -997,6 +1252,10 @@ class _MyHomePageState extends State<MyHomePage> {
                           child: const Text('Print Receipt'),
                         ),
                         ElevatedButton(
+                          onPressed: _printLabel,
+                          child: const Text('Print Label'),
+                        ),
+                        ElevatedButton(
                           onPressed: _getStatus,
                           child: const Text('Get Status'),
                         ),
@@ -1010,10 +1269,6 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            const BluetoothTestWidget(),
-            const SizedBox(height: 16),
-            const WiredTestWidget(),
           ],
         ),
       ),
