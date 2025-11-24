@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'dart:convert' show base64Encode;
 import 'package:image_picker/image_picker.dart';
 
+
 void main() {
   runApp(const MyApp());
 }
@@ -593,14 +594,11 @@ class _MyHomePageState extends State<MyHomePage> {
                 'footer': _footer,
                 'printableAreaMm': printableAreaMm,  // Add printable area for receipts too
               },
-          'items': [
-            {
-              'quantity': _itemQuantity,
-              'name': _itemName,
-              'price': _itemPrice,
-              'repeat': _itemRepeat,
-            }
-          ],
+          'items': List.generate(int.tryParse(_itemRepeat) ?? 1, (index) => {
+            'quantity': _itemQuantity,
+            'name': _itemName,
+            'price': _itemPrice,
+          }),
           'image': _logoBase64 == null
               ? null
               : {
@@ -1269,6 +1267,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
             ),
+            
           ],
         ),
       ),
