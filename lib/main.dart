@@ -152,29 +152,44 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _checkAndRequestPermissions() async {
+    // Only check Bluetooth permissions on Android - iOS handles this differently
     if (Platform.isAndroid) {
+      // Check if we need to request Bluetooth permissions
       final bluetoothStatus = await Permission.bluetoothConnect.status;
       final bluetoothScanStatus = await Permission.bluetoothScan.status;
 
       if (!bluetoothStatus.isGranted || !bluetoothScanStatus.isGranted) {
+        print('DEBUG: Bluetooth permissions not granted, requesting...');
+        
         final results = await [
           Permission.bluetoothConnect,
           Permission.bluetoothScan,
-          Permission.location,
+          Permission.location, // Also needed for Bluetooth discovery on some devices
         ].request();
 
-        if (results[Permission.bluetoothConnect]?.isGranted != true ||
-            results[Permission.bluetoothScan]?.isGranted != true) {
+        results.forEach((permission, status) {
+          print('DEBUG: Permission $permission: $status');
+        });
+
+        if (results[Permission.bluetoothConnect]?.isGranted == true) {
+          print('DEBUG: Bluetooth permissions granted');
+        } else {
+          print('DEBUG: Bluetooth permissions still denied');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Bluetooth permissions are required for printer discovery'),
+                content: Text('Bluetooth permissions are required for printer discovery. Please enable them in settings.'),
                 duration: Duration(seconds: 5),
               ),
             );
           }
         }
+      } else {
+        print('DEBUG: Bluetooth permissions already granted');
       }
+    } else {
+      // iOS - Bluetooth permissions are handled automatically by the system
+      print('DEBUG: Running on iOS - Bluetooth permissions handled by system');
     }
   }
 
@@ -1119,19 +1134,60 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _pickLogoImage() async {
-    final picker = ImagePicker();
-    final image = await picker.pickImage(source: ImageSource.gallery, maxWidth: 300);
-    if (image == null) return;
-    
+    // Support iOS & Android; silently ignore on other platforms
+    if (!(Platform.isIOS || Platform.isAndroid)) {
+      print('DEBUG: Image picking not supported on this platform');
+      return;
+    }
     try {
-      final bytes = await image.readAsBytes();
+      // Optional Android permission (may be unnecessary on newer Android photo picker API)
+      if (Platform.isAndroid) {
+        try {
+          final storageStatus = await Permission.storage.status;
+          if (storageStatus.isDenied) {
+            final result = await Permission.storage.request();
+            if (!result.isGranted) {
+              print('DEBUG: Storage permission denied (continuing, picker may still work).');
+            }
+          }
+        } catch (permErr) {
+          print('DEBUG: Storage permission check threw (ignoring): $permErr');
+        }
+      }
+      
+      final picker = ImagePicker();
+      final XFile? file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+      if (file == null) {
+        print('DEBUG: Image pick cancelled');
+        return;
+      }
+      
+      final bytes = await file.readAsBytes();
+      // Heuristic: decide target width based on original size
+      int suggestedWidth = 200;
+      try {
+        if (bytes.lengthInBytes > 4000000) {
+          suggestedWidth = 384;
+        } else if (bytes.lengthInBytes > 1000000) {
+          suggestedWidth = 320;
+        } else if (bytes.lengthInBytes > 300000) {
+          suggestedWidth = 256;
+        }
+      } catch (_) {}
+      
       final b64 = base64Encode(bytes);
       setState(() {
         _logoBase64 = b64;
+        _imageWidthPx = suggestedWidth;
       });
+      
+      print('DEBUG: Picked image size=${bytes.lengthInBytes} bytes, suggestedWidth=$suggestedWidth platform=${Platform.isIOS ? 'iOS' : 'Android'}');
     } catch (e) {
+      print('DEBUG: Failed to pick image: $e');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Logo pick failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Logo pick failed: $e'))
+      );
     }
   }
 
