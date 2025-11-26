@@ -57,6 +57,12 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _footerController = TextEditingController();
   final TextEditingController _logoBase64Controller = TextEditingController(); // Optional Base64 image data
 
+  // Label content controllers
+  final TextEditingController _labelProductNameController = TextEditingController();
+  final TextEditingController _labelPriceController = TextEditingController();
+  final TextEditingController _labelSizeColourController = TextEditingController();
+  final TextEditingController _labelScancodeController = TextEditingController();
+
   // Spacing / formatting knobs (can be adjusted via sliders in upcoming UI card)
   double _headerGap = 1;     // feed lines after header block
   double _lineSpacing = 0;   // extra feeds between detail lines
@@ -91,6 +97,19 @@ class _MyHomePageState extends State<MyHomePage> {
   String _itemRepeat = '3';
   // Estimated characters-per-line for current printer font (adjustable by user)
   int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
+  
+  // Label Printing Fields
+  String _labelProductName = 'Sample Product';
+  String _labelPrice = '\$5.00';
+  String _labelSizeColour = 'Small Turquoise';
+  int _labelScancode = 123456789;
+
+  // Paper size selection for labels - all Epson supported widths
+  String _labelPaperWidth = '80mm'; // Default to 80mm
+  final List<String> _availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
+  
+  // Number of labels to print
+  int _labelQuantity = 1;
   // ===============================================================================
 
   @override
@@ -102,6 +121,12 @@ class _MyHomePageState extends State<MyHomePage> {
     _detailsController.text = 'Order: 12345\\nDate: 2025-01-01 12:34';
     _itemsController.text = '2x Coffee @3.50\\n1x Bagel @2.25';
     _footerController.text = 'Thank you for visiting!';
+
+    // Initialize label controllers with default values
+    _labelProductNameController.text = _labelProductName;
+    _labelPriceController.text = _labelPrice;
+    _labelSizeColourController.text = _labelSizeColour;
+    _labelScancodeController.text = _labelScancode.toString();
 
     // POS style controller
     _headerControllerPos = TextEditingController(text: _headerTitle);
@@ -119,6 +144,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _itemsController.dispose();
     _footerController.dispose();
     _logoBase64Controller.dispose();
+    _labelProductNameController.dispose();
+    _labelPriceController.dispose();
+    _labelSizeColourController.dispose();
+    _labelScancodeController.dispose();
     _headerControllerPos.dispose();
     _statePollTimer?.cancel();
     super.dispose();
@@ -387,10 +416,29 @@ class _MyHomePageState extends State<MyHomePage> {
 
       await EpsonPrinter.connect(settings);
       setState(() => _isConnected = true);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
-      );
+      
+      // Try to detect paper width and set as default
+      try {
+        String detectedWidth = await EpsonPrinter.detectPaperWidth();
+        if (_availablePaperWidths.contains(detectedWidth)) {
+          setState(() => _labelPaperWidth = detectedWidth);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connected! Detected paper width: $detectedWidth')),
+          );
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last} (Detected: $detectedWidth)')),
+          );
+        }
+      } catch (e) {
+        // Paper width detection failed, but connection succeeded
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
+        );
+      }
     } catch (e) {
       setState(() => _isConnected = false);
       if (!mounted) return;
@@ -495,6 +543,128 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _printLabel() async {
+    if (!_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    try {
+      // Build label commands based on current label fields and paper width
+      final commands = _buildLabelCommands();
+      final printJob = EpsonPrintJob(commands: commands);
+      
+      // Print multiple labels based on quantity setting
+      for (int i = 0; i < _labelQuantity; i++) {
+        await EpsonPrinter.printReceipt(printJob);
+        
+        // Small delay between prints to avoid overwhelming the printer
+        if (i < _labelQuantity - 1) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
+
+      if (!mounted) return;
+      final message = _labelQuantity == 1 
+          ? 'Label printed successfully!' 
+          : '$_labelQuantity labels printed successfully!';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Label print failed: $e')),
+      );
+    }
+  }
+
+  List<EpsonPrintCommand> _buildLabelCommands() {
+    final List<EpsonPrintCommand> commands = [];
+    
+    // Use SDK centering for all elements to match barcode centering
+    // Set center alignment for all text elements
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'center'}
+    ));
+    
+    // Set bold style for product name
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false', 
+        'bold': 'true',
+        'color': '1'
+      }
+    ));
+    
+    // Product name (centered at top, bold)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': _labelProductNameController.text.trim() + '\n'}
+    ));
+    
+    // Reset text style to normal
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false',
+        'bold': 'false', 
+        'color': '1'
+      }
+    ));
+    
+    // Price (centered under product name)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': _labelPriceController.text.trim() + '\n'}
+    ));
+    
+    // Size/Color (centered under price)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': _labelSizeColourController.text.trim() + '\n'}
+    ));
+    
+    // CODE128 barcode with HRI below (center alignment already set)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.barcode,
+      parameters: {
+        'data': _labelScancodeController.text.trim(),
+        'type': 'CODE128_AUTO', // Using CODE128 auto for simplicity
+        'hri': 'below', // HRI (Human Readable Interpretation) below barcode
+        'width': 2, // Width of single module (2 dots)
+        'height': 35, // Height in dots (good for labels)
+        'font': 'A', // Font A for HRI
+      }
+    ));
+    
+    // Reset to left alignment after all label content
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'left'}
+    ));
+    
+    // // Add minimal spacing before cut to ensure proper positioning
+    // commands.add(EpsonPrintCommand(
+    //   type: EpsonCommandType.feed,
+    //   parameters: {'line': 1}
+    // ));
+    
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.cut,
+      parameters: {} // Back to default CUT_FEED but with minimal manual feed
+    ));
+    
+    return commands;
+  }
+
   // Build EpsonPrintCommand list from current layout controller contents.
   // This is intentionally conservative: relies only on 'text', 'feed', 'cut' for broad compatibility.
   List<EpsonPrintCommand> _buildReceiptCommandsFromLayout() {
@@ -572,67 +742,85 @@ class _MyHomePageState extends State<MyHomePage> {
     return cmds;
   }
 
-  // ===================== POS Receipt Formatting Helpers =====================
-  String _center(String text) {
-    text = text.trim();
-    if (text.isEmpty) return '';
-    if (text.length >= _posCharsPerLine) return text;
-    final totalPad = _posCharsPerLine - text.length;
-    final left = (totalPad / 2).floor();
-    final right = totalPad - left;
-    return ' ' * left + text + ' ' * right;
-  }
-
-  String _horizontalLine() => '-' * _posCharsPerLine;
-
-  String _leftRight(String left, String right) {
-    left = left.trim();
-    right = right.trim();
-    final space = _posCharsPerLine - left.length - right.length;
-    if (space < 1) {
-      final maxLeft = _posCharsPerLine - right.length - 1;
-      if (maxLeft < 1) return (left + right).substring(0, _posCharsPerLine);
-      left = left.substring(0, maxLeft);
-      return '$left ${right}';
-    }
-    return left + ' ' * space + right;
-  }
-
-  String _qtyNamePrice(String qty, String name, String price) {
-    // Layout: qty (3) name (left) price (right) within paper width.
-    qty = qty.trim();
-    name = name.trim();
-    price = price.trim();
-    const qtyWidth = 4; // e.g. '999x'
-    const priceWidth = 8; // enough for large price
-    final qtyStr = qty.length > 3 ? qty.substring(0, 3) : qty;
-    final qtyField = qtyStr.padRight(qtyWidth);
-    // Remaining width for name = total - qtyWidth - priceWidth
-    final nameWidth = _posCharsPerLine - qtyWidth - priceWidth;
-    String nameTrunc = name;
-    if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
-    final priceField = price.padLeft(priceWidth);
-    return qtyField + nameTrunc.padRight(nameWidth) + priceField;
-  }
-  // ==========================================================================
-
   List<EpsonPrintCommand> _buildPosReceiptCommands() {
     final List<EpsonPrintCommand> cmds = [];
 
+    // Calculate the correct characters per line based on detected paper width
+    int effectiveCharsPerLine;
+    switch (_labelPaperWidth) {
+      case '58mm': effectiveCharsPerLine = 32; break;  // 58mm typically 32 chars
+      case '60mm': effectiveCharsPerLine = 34; break;  // 60mm typically 34 chars  
+      case '70mm': effectiveCharsPerLine = 42; break;  // 70mm typically 42 chars
+      case '76mm': effectiveCharsPerLine = 45; break;  // 76mm typically 45 chars
+      case '80mm': effectiveCharsPerLine = 48; break;  // 80mm typically 48 chars
+      default:     effectiveCharsPerLine = _posCharsPerLine; break; // Fallback to current setting
+    }
+
+    // Helper functions that use the correct character width
+    String centerText(String text) {
+      text = text.trim();
+      if (text.isEmpty) return '';
+      if (text.length >= effectiveCharsPerLine) return text;
+      final totalPad = effectiveCharsPerLine - text.length;
+      final left = (totalPad / 2).floor();
+      final right = totalPad - left;
+      return ' ' * left + text + ' ' * right;
+    }
+
+    String horizontalLine() => '-' * effectiveCharsPerLine;
+
+    String leftRight(String left, String right) {
+      left = left.trim();
+      right = right.trim();
+      final space = effectiveCharsPerLine - left.length - right.length;
+      if (space < 1) {
+        final maxLeft = effectiveCharsPerLine - right.length - 1;
+        if (maxLeft < 1) return (left + right).substring(0, effectiveCharsPerLine);
+        left = left.substring(0, maxLeft);
+        return '$left ${right}';
+      }
+      return left + ' ' * space + right;
+    }
+
+    String qtyNamePrice(String qty, String name, String price) {
+      // Layout: qty (3) name (left) price (right) within paper width.
+      qty = qty.trim();
+      name = name.trim();
+      price = price.trim();
+      
+      // Adjust field widths for narrower paper
+      final qtyWidth = effectiveCharsPerLine >= 40 ? 4 : 3; // e.g. '99x' for narrow paper
+      final priceWidth = effectiveCharsPerLine >= 40 ? 8 : 6; // Shorter price field for narrow paper
+      
+      final qtyStr = qty.length > (qtyWidth - 1) ? qty.substring(0, qtyWidth - 1) : qty;
+      final qtyField = (qtyStr + 'x').padRight(qtyWidth);
+      
+      // Remaining width for name = total - qtyWidth - priceWidth
+      final nameWidth = effectiveCharsPerLine - qtyWidth - priceWidth;
+      String nameTrunc = name;
+      if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
+      
+      // Ensure price has '$' prefix
+      final formattedPrice = price.startsWith('\$') ? price : '\$$price';
+      final priceField = formattedPrice.padLeft(priceWidth);
+      
+      return qtyField + nameTrunc.padRight(nameWidth) + priceField;
+    }
+
     int _estimatePrinterDots() {
-      // Rough heuristic mapping from characters-per-line to dot width.
-      if (_posCharsPerLine <= 32) return 384;   // 58mm common
-      if (_posCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
-      if (_posCharsPerLine <= 48) return 576;   // 80mm Font A
-      if (_posCharsPerLine <= 56) return 640;   // Some 3" models
-      if (_posCharsPerLine <= 64) return 832;   // 80mm Font B / high density
+      // Map from effective chars per line to dot width
+      if (effectiveCharsPerLine <= 32) return 384;   // 58mm common
+      if (effectiveCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
+      if (effectiveCharsPerLine <= 48) return 576;   // 80mm Font A
+      if (effectiveCharsPerLine <= 56) return 640;   // Some 3" models
+      if (effectiveCharsPerLine <= 64) return 832;   // 80mm Font B / high density
       return 576; // fallback
     }
     final printerWidthDots = _estimatePrinterDots();
 
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(title) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(title) + '\n' }));
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
         // Persist logo to temp file for native side
         try {
@@ -653,7 +841,7 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         } catch (_) {
           // Fallback marker if file write fails
-          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO ERR]') + '\n' }));
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('[LOGO ERR]') + '\n' }));
         }
       }
       if (_headerSpacingLines > 0) {
@@ -671,39 +859,39 @@ class _MyHomePageState extends State<MyHomePage> {
     };
 
     if (_locationText.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(_locationText.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_locationText.trim()) + '\n' }));
     }
 
     // Centered 'Receipt'
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + _center('Receipt') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + centerText('Receipt') + '\n' }));
 
     // Date Time (left) vs Cashier (right)
     final dateTime = '${_date.trim()} ${_time.trim()}';
     final cashierStr = 'Cashier: ${_cashier.trim()}';
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(dateTime, cashierStr) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(dateTime, cashierStr) + '\n' }));
 
     // Receipt # vs Lane
     final recLine = 'Receipt: ${_receiptNum.trim()}';
     final laneLine = 'Lane: ${_lane.trim()}';
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(recLine, laneLine) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(recLine, laneLine) + '\n' }));
 
     // Blank line
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
 
     // Horizontal line
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     // Items repeated
     final repeatCount = int.tryParse(_itemRepeat) ?? 1;
     for (int i = 0; i < repeatCount; i++) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
     }
 
     // Second horizontal line
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     if (_footer.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_footer.trim()) + '\n' }));
     }
 
     // End feeds + cut
@@ -1036,6 +1224,96 @@ class _MyHomePageState extends State<MyHomePage> {
                           onPressed: _isConnected ? _printReceipt : null,
                           child: const Text('Print Structured Receipt'),
                         ),
+                        const SizedBox(height: 16),
+                        // Label content fields
+                        const Text('Label Content', 
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelProductNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Product Name',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelPriceController,
+                          decoration: const InputDecoration(
+                            labelText: 'Price',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelSizeColourController,
+                          decoration: const InputDecoration(
+                            labelText: 'Size / Colour',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelScancodeController,
+                          decoration: const InputDecoration(
+                            labelText: 'Scancode/Barcode',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        // Paper size selection for labels
+                        const Text('How wide is your label printer paper?', 
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        // Create radio buttons for all available paper widths
+                        Wrap(
+                          spacing: 16.0,
+                          runSpacing: 8.0,
+                          children: _availablePaperWidths.map((width) => Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Radio<String>(
+                                value: width,
+                                groupValue: _labelPaperWidth,
+                                onChanged: (value) => setState(() => _labelPaperWidth = value!),
+                              ),
+                              Text(width),
+                            ],
+                          )).toList(),
+                        ),
+                        const SizedBox(height: 16),
+                        // Label quantity slider
+                        const Text('Number of labels to print:', 
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Text('1'),
+                            Expanded(
+                              child: Slider(
+                                value: _labelQuantity.toDouble(),
+                                min: 1.0,
+                                max: 10.0,
+                                divisions: 9,
+                                label: _labelQuantity.toString(),
+                                onChanged: (double value) {
+                                  setState(() {
+                                    _labelQuantity = value.round();
+                                  });
+                                },
+                              ),
+                            ),
+                            const Text('10'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text('Quantity: $_labelQuantity', 
+                          style: const TextStyle(fontSize: 16)),
+                        const SizedBox(height: 8),
+                        ElevatedButton(
+                          onPressed: _isConnected ? _printLabel : null,
+                          child: const Text('Print Label'),
+                        ),
                       ],
                     ),
                   ],
@@ -1150,6 +1428,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(onPressed: _selectedPrinter != null && !_isConnected ? _connectToPrinter : null, child: const Text('Connect')),
                         ElevatedButton(onPressed: _isConnected ? _disconnectFromPrinter : null, child: const Text('Disconnect')),
                         ElevatedButton(onPressed: _isConnected ? _printReceipt : null, child: const Text('Print Test Receipt')),
+                        ElevatedButton(onPressed: _isConnected ? _printLabel : null, child: const Text('Print Label')),
                         ElevatedButton(
                           onPressed: _isConnected
                               ? () async {
