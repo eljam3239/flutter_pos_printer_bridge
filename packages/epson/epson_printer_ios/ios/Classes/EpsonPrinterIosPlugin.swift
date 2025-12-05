@@ -192,6 +192,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             getDiscoveryState(result: result)
         case "abortDiscovery":
             abortDiscovery(result: result)
+        case "detectPaperWidth":
+            detectPaperWidth(result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -700,5 +702,23 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             pendingDiscoveryWork = nil
         }
         result(nil)
+    }
+    
+    // Detect paper width using Epson SDK
+    private func detectPaperWidth(result: @escaping FlutterResult) {
+        print("DEBUG: detectPaperWidth called")
+        epsonWrapper.detectPaperWidth { [weak self] paperWidth, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("DEBUG: Paper width detection failed: \(error.localizedDescription)")
+                    result(FlutterError(code: "DETECTION_FAILED", message: error.localizedDescription, details: nil))
+                } else if let paperWidth = paperWidth {
+                    print("DEBUG: Paper width detected: \(paperWidth)")
+                    result(paperWidth)
+                } else {
+                    result(FlutterError(code: "UNKNOWN_ERROR", message: "No paper width or error returned", details: nil))
+                }
+            }
+        }
     }
 }

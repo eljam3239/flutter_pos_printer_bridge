@@ -5,6 +5,44 @@
 #import "EpsonSDKWrapper.h"
 #import <UIKit/UIKit.h>
 
+// Helper delegate class for handling getPrinterSetting callbacks
+@interface PrinterSettingDelegate : NSObject <Epos2PrinterSettingDelegate>
+@property (nonatomic, copy) void (^completionHandler)(NSString *, NSError *);
+@end
+
+@implementation PrinterSettingDelegate
+
+- (void)onGetPrinterSetting:(int32_t)code type:(int32_t)type value:(int32_t)value {
+    NSLog(@"onGetPrinterSetting: code=%d, type=%d, value=%d", code, type, value);
+    
+    if (self.completionHandler) {
+        if (code == EPOS2_CODE_SUCCESS && type == EPOS2_PRINTER_SETTING_PAPERWIDTH) {
+            NSString *paperWidth = [self mapPaperWidthValue:value];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.completionHandler(paperWidth, nil);
+            });
+        } else {
+            NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:code userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"getPrinterSetting failed (code: %d)", code]}];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.completionHandler(nil, error);
+            });
+        }
+    }
+}
+
+- (NSString *)mapPaperWidthValue:(int32_t)value {
+    switch (value) {
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_58_0: return @"58mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_60_0: return @"60mm"; 
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_70_0: return @"70mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_76_0: return @"76mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_80_0: return @"80mm";
+        default: return [NSString stringWithFormat:@"Unknown(%d)", value];
+    }
+}
+
+@end
+
 // Private interface
 @interface EpsonSDKWrapper ()
 - (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback;
@@ -294,12 +332,51 @@
         if ([type isEqualToString:@"addText"] || [type isEqualToString:@"text"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *text = parameters[@"data"];
+            NSString *align = parameters[@"align"];
+            
+            // Set alignment if specified
+            if (align) {
+                if ([align.lowercaseString isEqualToString:@"center"]) {
+                    [self.printer addTextAlign:EPOS2_ALIGN_CENTER];
+                    NSLog(@"Setting text alignment to center");
+                } else if ([align.lowercaseString isEqualToString:@"right"]) {
+                    [self.printer addTextAlign:EPOS2_ALIGN_RIGHT];
+                    NSLog(@"Setting text alignment to right");
+                } else {
+                    [self.printer addTextAlign:EPOS2_ALIGN_LEFT];
+                    NSLog(@"Setting text alignment to left");
+                }
+            }
+            
             if (text) {
                 NSLog(@"Adding text: %@", text);
                 [self.printer addText:text];
-            } else {
+            } else if (!align) {
                 NSLog(@"WARNING: Text command missing data parameter");
             }
+        } else if ([type isEqualToString:@"textStyle"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            
+            // Parse parameters with defaults - parameters are already strings, don't call stringValue
+            BOOL reverse = [parameters[@"reverse"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            BOOL underline = [parameters[@"underline"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            BOOL bold = [parameters[@"bold"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            
+            // Parse color (default to first color)
+            int color = EPOS2_COLOR_1;
+            NSString *colorStr = parameters[@"color"];
+            if ([colorStr isEqualToString:@"none"]) {
+                color = EPOS2_COLOR_NONE;
+            } else if ([colorStr isEqualToString:@"2"]) {
+                color = EPOS2_COLOR_2;
+            } else if ([colorStr isEqualToString:@"3"]) {
+                color = EPOS2_COLOR_3;
+            } else if ([colorStr isEqualToString:@"4"]) {
+                color = EPOS2_COLOR_4;
+            }
+            
+            NSLog(@"Setting text style: reverse=%d, underline=%d, bold=%d, color=%d", reverse, underline, bold, color);
+            [self.printer addTextStyle:reverse ul:underline em:bold color:color];
         } else if ([type isEqualToString:@"addTextLn"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *text = parameters[@"data"];
@@ -315,8 +392,39 @@
             NSLog(@"Adding feed lines: %d", lineCount);
             [self.printer addFeedLine:lineCount];
         } else if ([type isEqualToString:@"addCut"] || [type isEqualToString:@"cut"]) {
-            NSLog(@"Adding cut command");
-            [self.printer addCut:EPOS2_CUT_FEED];
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *cutType = parameters[@"cutType"] ?: @"feed";
+            
+            if ([cutType.lowercaseString isEqualToString:@"no_feed"]) {
+                NSLog(@"Adding cut command (no feed)");
+                [self.printer addCut:EPOS2_CUT_NO_FEED];
+            } else if ([cutType.lowercaseString isEqualToString:@"reserve"]) {
+                NSLog(@"Adding cut command (reserve)");
+                [self.printer addCut:EPOS2_CUT_RESERVE];
+            } else if ([cutType.lowercaseString isEqualToString:@"full_cut_feed"]) {
+                NSLog(@"Adding full cut command (with feed)");
+                [self.printer addCut:EPOS2_FULL_CUT_FEED];
+            } else if ([cutType.lowercaseString isEqualToString:@"full_cut_no_feed"]) {
+                NSLog(@"Adding full cut command (no feed)");
+                [self.printer addCut:EPOS2_FULL_CUT_NO_FEED];
+            } else {
+                NSLog(@"Adding cut command (with feed)");
+                [self.printer addCut:EPOS2_CUT_FEED];
+            }
+        } else if ([type isEqualToString:@"feedPosition"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *position = parameters[@"position"] ?: @"cutting";
+            
+            if ([position.lowercaseString isEqualToString:@"peeling"]) {
+                NSLog(@"Setting feed position to peeling");
+                [self.printer addFeedPosition:EPOS2_FEED_PEELING];
+            } else if ([position.lowercaseString isEqualToString:@"current_tof"]) {
+                NSLog(@"Setting feed position to current TOF");
+                [self.printer addFeedPosition:EPOS2_FEED_CURRENT_TOF];
+            } else {
+                NSLog(@"Setting feed position to cutting");
+                [self.printer addFeedPosition:EPOS2_FEED_CUTTING];
+            }
         } else if ([type isEqualToString:@"image"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *imagePath = parameters[@"imagePath"];
@@ -389,6 +497,69 @@
                 if (debug) { [self.printer addText:[NSString stringWithFormat:@"[IOS_IMG_ADD_FAIL %d]\n", addResult]]; }
             } else if (debug) {
                 [self.printer addText:@"[IOS_IMG_END]\n"]; // marker after successful add
+            }
+        } else if ([type isEqualToString:@"barcode"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *data = parameters[@"data"];
+            if (!data || data.length == 0) {
+                NSLog(@"WARNING: Barcode command missing data parameter");
+                continue;
+            }
+            
+            // Parse barcode parameters with defaults
+            NSString *barcodeType = parameters[@"type"] ?: @"CODE128_AUTO";
+            NSString *hriPosition = parameters[@"hri"] ?: @"none";
+            NSString *font = parameters[@"font"] ?: @"A";
+            NSNumber *widthNum = parameters[@"width"];
+            NSNumber *heightNum = parameters[@"height"];
+            
+            int width = widthNum ? widthNum.intValue : 2; // Default width
+            int height = heightNum ? heightNum.intValue : 60; // Default height
+            
+            // Map barcode type string to constants
+            int barcodeTypeConstant = EPOS2_BARCODE_CODE128_AUTO; // Default
+            if ([barcodeType isEqualToString:@"CODE128"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE128;
+            } else if ([barcodeType isEqualToString:@"CODE128_AUTO"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE128_AUTO;
+            } else if ([barcodeType isEqualToString:@"CODE39"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE39;
+            } else if ([barcodeType isEqualToString:@"EAN13"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_EAN13;
+            } else if ([barcodeType isEqualToString:@"UPC_A"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_UPC_A;
+            }
+            
+            // Map HRI position
+            int hriConstant = EPOS2_HRI_NONE; // Default
+            if ([hriPosition isEqualToString:@"below"]) {
+                hriConstant = EPOS2_HRI_BELOW;
+            } else if ([hriPosition isEqualToString:@"above"]) {
+                hriConstant = EPOS2_HRI_ABOVE;
+            } else if ([hriPosition isEqualToString:@"both"]) {
+                hriConstant = EPOS2_HRI_BOTH;
+            }
+            
+            // Map font
+            int fontConstant = EPOS2_FONT_A; // Default
+            if ([font isEqualToString:@"B"]) {
+                fontConstant = EPOS2_FONT_B;
+            } else if ([font isEqualToString:@"C"]) {
+                fontConstant = EPOS2_FONT_C;
+            }
+            
+            NSLog(@"Adding barcode: data=%@, type=%@, hri=%@", data, barcodeType, hriPosition);
+            int barcodeResult = [self.printer addBarcode:data
+                                                    type:barcodeTypeConstant
+                                                     hri:hriConstant
+                                                    font:fontConstant
+                                                   width:width
+                                                  height:height];
+            
+            if (barcodeResult != EPOS2_SUCCESS) {
+                NSLog(@"ERROR: addBarcode failed with code %d", barcodeResult);
+            } else {
+                NSLog(@"Barcode added successfully");
             }
         } else {
             NSLog(@"WARNING: Unknown command type: %@", type);
@@ -625,6 +796,52 @@
 
 - (void)onPtrReceive:(Epos2Printer *)printerObj code:(int32_t)code status:(Epos2PrinterStatusInfo *)status printJobId:(NSString *)printJobId {
     NSLog(@"Print job completed with code: %d", code);
+}
+
+#pragma mark - Paper Width Detection
+
+- (void)detectPaperWidthWithCompletion:(void (^)(NSString * _Nullable paperWidth, NSError * _Nullable error))completion {
+    if (!self.printer) {
+        NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:1001 userInfo:@{NSLocalizedDescriptionKey: @"Printer not connected"}];
+        completion(nil, error);
+        return;
+    }
+    
+    // Store completion handler for the callback
+    static void (^staticCompletion)(NSString *, NSError *);
+    staticCompletion = completion;
+    
+    // Create a delegate object to handle the callback
+    static dispatch_once_t onceToken;
+    static PrinterSettingDelegate *settingDelegate;
+    dispatch_once(&onceToken, ^{
+        settingDelegate = [[PrinterSettingDelegate alloc] init];
+    });
+    
+    // Set the static completion handler on our delegate
+    [settingDelegate setCompletionHandler:staticCompletion];
+    
+    // Try the basic getPrinterSetting first
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        int32_t result = [self.printer getPrinterSetting:EPOS2_PARAM_DEFAULT 
+                                                    type:EPOS2_PRINTER_SETTING_PAPERWIDTH 
+                                                delegate:settingDelegate];
+        
+        if (result != EPOS2_SUCCESS) {
+            NSLog(@"getPrinterSetting failed with code: %d, will try getPrinterSettingEx", result);
+            // Fallback to getPrinterSettingEx for models that don't support basic method
+            [self tryGetPrinterSettingExWithCompletion:completion];
+        }
+    });
+}
+
+- (void)tryGetPrinterSettingExWithCompletion:(void (^)(NSString * _Nullable paperWidth, NSError * _Nullable error))completion {
+    // Note: getPrinterSettingEx may not be available in all SDK versions
+    // For now, we'll return an error indicating the advanced method is not available
+    NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:1002 userInfo:@{NSLocalizedDescriptionKey: @"getPrinterSettingEx not available in this SDK version"}];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        completion(nil, error);
+    });
 }
 
 @end

@@ -49,8 +49,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Timer? _statePollTimer;
   
   // ================= Receipt Layout State (Structured Formatting) =================
-  // Controllers for dynamic receipt fields. These will allow the user to build
-  // argument-driven receipts similar to the Star printer sample.
+  // Controllers for dynamic receipt fields. These will allow the user to build argument-driven receipts
   final TextEditingController _headerController = TextEditingController();
   final TextEditingController _detailsController = TextEditingController(); // Multiline: key: value or free-form lines
   final TextEditingController _itemsController = TextEditingController();   // Multiline: item lines (e.g. "2x Coffee @ 3.50")
@@ -68,16 +67,12 @@ class _MyHomePageState extends State<MyHomePage> {
   double _lineSpacing = 0;   // extra feeds between detail lines
   double _itemSpacing = 0;   // extra feeds between item lines
 
-  // Future: cache of parsed items / prebuilt commands if optimization needed.
-  // For now we rebuild on each print.
-  // ===============================================================================
-
   // ================= POS Style Receipt Fields (Specific Layout) ==================
   String _headerTitle = "Wendy's";
-  int _headerFontSize = 32; // placeholder (SDK may later support styles)
+  int _headerFontSize = 32; 
   int _headerSpacingLines = 1;
   String? _logoBase64; // optional centered image
-  int _imageWidthPx = 200; // placeholder for future image scaling
+  int _imageWidthPx = 200; 
   int _imageSpacingLines = 1;
   late final TextEditingController _headerControllerPos; // direct edit of title if needed
 
@@ -93,10 +88,10 @@ class _MyHomePageState extends State<MyHomePage> {
   // Single item template (will repeat itemRepeat times)
   String _itemQuantity = '1';
   String _itemName = 'Orange';
-  String _itemPrice = '5.00';
+  String _itemPrice = '5000.00';
   String _itemRepeat = '3';
   // Estimated characters-per-line for current printer font (adjustable by user)
-  int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
+  int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm 35 right now
   
   // Label Printing Fields
   String _labelProductName = 'Sample Product';
@@ -115,8 +110,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    // Defer Bluetooth permission requests to Bluetooth actions.
-    // Seed some default demo content for structured receipt fields.
+    // Initialize receipt controllers with default values
     _headerController.text = 'My Shop\\n123 Sample Street';
     _detailsController.text = 'Order: 12345\\nDate: 2025-01-01 12:34';
     _itemsController.text = '2x Coffee @3.50\\n1x Bagel @2.25';
@@ -152,7 +146,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _statePollTimer?.cancel();
     super.dispose();
   }
-
+  // Start periodic polling of native discovery state (iOS only) to handle USB/Bluetooth logic by setting the flag
   void _startDiscoveryStatePolling() {
     _statePollTimer?.cancel();
     _statePollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
@@ -210,7 +204,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
   }
-
+  //funny artifact from the early days
   void _incrementCounter() {
     setState(() {
       _counter++;
@@ -222,7 +216,8 @@ class _MyHomePageState extends State<MyHomePage> {
       final printers = await EpsonPrinter.discoverPrinters();
       setState(() {
         _discoveredPrinters = printers;
-        if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
+        //if any printers are discovered the selectec printer is set to first
+        if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) { 
           _selectedPrinter = printers.isNotEmpty ? printers.first : null;
         }
       });
@@ -238,6 +233,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  //one button discovery
   Future<void> _discoverAllPrinters() async {
     // Prevent concurrent discoveries
     if (_isDiscovering || _nativeDiscoveryState != 'idle') {
@@ -447,7 +443,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
   }
-
+  //direct bluetooth pairing -- hidden on Android
   Future<void> _pairBluetooth() async {
     try {
       final res = await EpsonPrinter.pairBluetoothDevice();
@@ -748,7 +744,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // Calculate the correct characters per line based on detected paper width
     int effectiveCharsPerLine;
     switch (_labelPaperWidth) {
-      case '58mm': effectiveCharsPerLine = 32; break;  // 58mm typically 32 chars
+      case '58mm': effectiveCharsPerLine = 35; break;  // 58mm - more conservative to match real 58mm behavior
       case '60mm': effectiveCharsPerLine = 34; break;  // 60mm typically 34 chars  
       case '70mm': effectiveCharsPerLine = 42; break;  // 70mm typically 42 chars
       case '76mm': effectiveCharsPerLine = 45; break;  // 76mm typically 45 chars
@@ -757,17 +753,38 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     // Helper functions that use the correct character width
-    String centerText(String text) {
-      text = text.trim();
-      if (text.isEmpty) return '';
-      if (text.length >= effectiveCharsPerLine) return text;
-      final totalPad = effectiveCharsPerLine - text.length;
-      final left = (totalPad / 2).floor();
-      final right = totalPad - left;
-      return ' ' * left + text + ' ' * right;
-    }
-
     String horizontalLine() => '-' * effectiveCharsPerLine;
+
+    // Wrap long text to fit within the specified character width
+    List<String> wrapText(String text, int maxWidth) {
+      text = text.trim();
+      if (text.isEmpty) return [];
+      
+      final List<String> lines = [];
+      final words = text.split(' ');
+      String currentLine = '';
+      
+      for (String word in words) {
+        final testLine = currentLine.isEmpty ? word : '$currentLine $word';
+        if (testLine.length <= maxWidth) {
+          currentLine = testLine;
+        } else {
+          if (currentLine.isNotEmpty) {
+            lines.add(currentLine);
+            currentLine = word;
+          } else {
+            // Single word longer than maxWidth - just add it
+            lines.add(word);
+          }
+        }
+      }
+      
+      if (currentLine.isNotEmpty) {
+        lines.add(currentLine);
+      }
+      
+      return lines;
+    }
 
     String leftRight(String left, String right) {
       left = left.trim();
@@ -820,7 +837,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(title) + '\n' }));
+      // Use SDK centering like labels instead of manual padding
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap title text to respect the selected paper width
+      final wrappedTitleLines = wrapText(title, effectiveCharsPerLine);
+      for (String line in wrappedTitleLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
         // Persist logo to temp file for native side
         try {
@@ -841,12 +864,14 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         } catch (_) {
           // Fallback marker if file write fails
-          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('[LOGO ERR]') + '\n' }));
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '[LOGO ERR]' + '\n' }));
         }
       }
       if (_headerSpacingLines > 0) {
         cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerSpacingLines }));
       }
+      // Reset to left alignment after title
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // Future style/image usage placeholder (avoid unused field warnings until implemented)
@@ -859,39 +884,63 @@ class _MyHomePageState extends State<MyHomePage> {
     };
 
     if (_locationText.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_locationText.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap location text to respect the selected paper width
+      final wrappedLocationLines = wrapText(_locationText.trim(), effectiveCharsPerLine);
+      for (String line in wrappedLocationLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // Centered 'Receipt'
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + centerText('Receipt') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\nReceipt\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Date Time (left) vs Cashier (right)
+    // Date Time (left) vs Cashier (right) - center the whole line using SDK
     final dateTime = '${_date.trim()} ${_time.trim()}';
     final cashierStr = 'Cashier: ${_cashier.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(dateTime, cashierStr) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Receipt # vs Lane
+    // Receipt # vs Lane - center the whole line using SDK
     final recLine = 'Receipt: ${_receiptNum.trim()}';
     final laneLine = 'Lane: ${_lane.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(recLine, laneLine) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
     // Blank line
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
 
-    // Horizontal line
+    // Horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Items repeated
+    // Items repeated - center each item line using SDK
     final repeatCount = int.tryParse(_itemRepeat) ?? 1;
     for (int i = 0; i < repeatCount; i++) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
-    // Second horizontal line
+    // Second horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
     if (_footer.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_footer.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap footer text to respect the selected paper width
+      final wrappedFooterLines = wrapText(_footer.trim(), effectiveCharsPerLine);
+      for (String line in wrappedFooterLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // End feeds + cut

@@ -29,6 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)clearCommandBuffer;
 - (BOOL)openCashDrawer;
 - (void)pairBluetoothDeviceWithCompletion:(void (^)(NSString * _Nullable target, int result))completion;
+- (void)detectPaperWidthWithCompletion:(void (^)(NSString * _Nullable paperWidth, NSError * _Nullable error))completion;
 
 @end
 
