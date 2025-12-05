@@ -29,6 +29,10 @@ class EpsonPrinterAndroidPlugin: FlutterPlugin, MethodCallHandler {
       "abortDiscovery" -> {
         result.success(null)
       }
+      "detectPaperWidth" -> {
+        // Android stub - always return 80mm for now until full implementation
+        result.success("80mm")
+      }
       else -> result.notImplemented()
     }
   }
