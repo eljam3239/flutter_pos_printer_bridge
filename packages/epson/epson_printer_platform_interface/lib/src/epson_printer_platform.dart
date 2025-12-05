@@ -93,4 +93,9 @@ abstract class EpsonPrinterPlatform extends PlatformInterface {
   Future<void> abortDiscovery() {
     throw UnimplementedError('abortDiscovery() has not been implemented.');
   }
+
+  /// Detects the paper width of the connected printer
+  Future<String> detectPaperWidth() {
+    throw UnimplementedError('detectPaperWidth() has not been implemented.');
+  }
 }

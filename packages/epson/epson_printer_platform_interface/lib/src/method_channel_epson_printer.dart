@@ -93,4 +93,10 @@ class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
   Future<void> abortDiscovery() async {
     await methodChannel.invokeMethod<void>('abortDiscovery');
   }
+
+  @override
+  Future<String> detectPaperWidth() async {
+    final result = await methodChannel.invokeMethod<String>('detectPaperWidth');
+    return result ?? 'Unknown';
+  }
 }

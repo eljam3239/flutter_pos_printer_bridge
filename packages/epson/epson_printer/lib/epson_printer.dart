@@ -82,6 +82,11 @@ class EpsonPrinter {
   static Future<void> abortDiscovery() {
     return _platform.abortDiscovery();
   }
+
+  /// Detects the paper width of the connected printer
+  static Future<String> detectPaperWidth() {
+    return _platform.detectPaperWidth();
+  }
 }
 
 
