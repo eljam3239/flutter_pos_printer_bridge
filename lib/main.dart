@@ -100,6 +100,10 @@ class _MyHomePageState extends State<MyHomePage> {
   List<Map<String, TextEditingController>> _zebraLineItemControllers = [];
   bool _zebraShowReceiptForm = false;
   
+  // MAC address for direct BLE connection (Android only)
+  String _zebraMacAddress = '';
+  final TextEditingController _zebraMacAddressController = TextEditingController();
+  
   // Receipt content controllers
   final TextEditingController _headerController = TextEditingController();
   final TextEditingController _detailsController = TextEditingController();
@@ -197,6 +201,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _zebraCashierNameController.dispose();
     _zebraLaneNumberController.dispose();
     _zebraThankYouMessageController.dispose();
+    _zebraMacAddressController.dispose();
     
     // Dispose Zebra line item controllers
     for (var controllerMap in _zebraLineItemControllers) {
@@ -345,7 +350,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
     try {
       print('[Flutter] Starting automatic network discovery...');
-      final printers = await ZebraPrinter.discoverPrinters();
+      final printers = await ZebraPrinter.discoverNetworkPrintersAuto();
       print('[Flutter] Auto discovery completed. Found ${printers.length} printers');
       
       setState(() {
@@ -949,20 +954,50 @@ class _MyHomePageState extends State<MyHomePage> {
 
             print('[Flutter] Connecting to Zebra printer: ${_selectedZebraPrinter!.address}');
             await ZebraPrinter.connect(settings);
+            print('[Flutter] Connection successful');
             
-            // Fetch printer dimensions after connection
+            // Add small delay to ensure connection is fully established
+            await Future.delayed(const Duration(milliseconds: 500));
+            
+            // Auto-fetch printer dimensions after successful connection
             try {
+              print('[Flutter] Fetching printer dimensions after connection...');
               final dimensions = await ZebraPrinter.getPrinterDimensions();
-              _connectedZebraPrinter = ConnectedPrinter(
-                discoveredPrinter: _selectedZebraPrinter!,
-                printWidthInDots: dimensions['printWidthInDots'],
-                labelLengthInDots: dimensions['labelLengthInDots'], 
-                dpi: dimensions['dpi'],
-                maxPrintWidthInDots: dimensions['maxPrintWidthInDots'],
-                mediaWidthInDots: dimensions['mediaWidthInDots'],
-                connectedAt: DateTime.now(),
-              );
-              print('[Flutter] Zebra printer dimensions: ${_connectedZebraPrinter.toString()}');
+              print('[Flutter] Raw dimensions received: $dimensions');
+              
+              // Validate that we got reasonable dimensions for a ZD421/ZD410
+              final printWidth = dimensions['printWidthInDots'] ?? 0;
+              final labelLength = dimensions['labelLengthInDots'] ?? 0;
+              final dpi = dimensions['dpi'] ?? 203;
+              
+              if (printWidth < 100 || labelLength < 100) {
+                print('[Flutter] Warning: Dimensions seem invalid, retrying...');
+                await Future.delayed(const Duration(milliseconds: 300));
+                final retryDimensions = await ZebraPrinter.getPrinterDimensions();
+                print('[Flutter] Retry dimensions: $retryDimensions');
+                
+                _connectedZebraPrinter = ConnectedPrinter(
+                  discoveredPrinter: _selectedZebraPrinter!,
+                  printWidthInDots: retryDimensions['printWidthInDots'],
+                  labelLengthInDots: retryDimensions['labelLengthInDots'], 
+                  dpi: retryDimensions['dpi'],
+                  maxPrintWidthInDots: retryDimensions['maxPrintWidthInDots'],
+                  mediaWidthInDots: retryDimensions['mediaWidthInDots'],
+                  connectedAt: DateTime.now(),
+                );
+              } else {
+                _connectedZebraPrinter = ConnectedPrinter(
+                  discoveredPrinter: _selectedZebraPrinter!,
+                  printWidthInDots: dimensions['printWidthInDots'],
+                  labelLengthInDots: dimensions['labelLengthInDots'], 
+                  dpi: dimensions['dpi'],
+                  maxPrintWidthInDots: dimensions['maxPrintWidthInDots'],
+                  mediaWidthInDots: dimensions['mediaWidthInDots'],
+                  connectedAt: DateTime.now(),
+                );
+              }
+              
+              print('[Flutter] Connected printer dimensions: ${_connectedZebraPrinter.toString()}');
             } catch (e) {
               print('[Flutter] Warning: Could not fetch Zebra printer dimensions: $e');
               _connectedZebraPrinter = ConnectedPrinter(
@@ -2176,6 +2211,279 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  // Zebra MAC address direct BLE connection
+  Future<void> _testDirectBleConnection() async {
+    if (_zebraMacAddress.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter MAC address first')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isDiscovering = true;
+    });
+
+    try {
+      print('[Flutter] Testing direct BLE connection to MAC: $_zebraMacAddress');
+      final printers = await ZebraPrinter.testDirectBleConnection(macAddress: _zebraMacAddress);
+      print('[Flutter] Direct BLE connection test completed. Found ${printers.length} printers');
+      
+      setState(() {
+        _zebraDiscoveredPrinters.addAll(printers);
+        
+        final zebraAddresses = _zebraDiscoveredPrinters
+            .map((printer) => '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}')
+            .toList();
+        _discoveredPrinters = zebraAddresses;
+        
+        _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+        _selectedZebraPrinter = _zebraDiscoveredPrinters.isNotEmpty ? _zebraDiscoveredPrinters.first : null;
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Direct BLE found ${printers.length} printers')),
+      );
+    } catch (e) {
+      print('[Flutter] Direct BLE connection failed: $e');
+      setState(() {
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Direct BLE connection failed: $e')),
+      );
+    }
+  }
+
+  // Zebra dimensions UI methods
+  Future<void> _getZebraDimensionsUI() async {
+    if (!_isConnected || _selectedZebraPrinter == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    try {
+      print('[Flutter] Getting printer dimensions...');
+      
+      // Try both methods - the built-in method and direct SGD reading
+      final dimensions = await ZebraPrinter.getPrinterDimensions();
+      print('[Flutter] Built-in method dimensions: $dimensions');
+      
+      // Also try reading dimensions directly via SGD parameters
+      Map<String, String?> sgdDimensions = {};
+      try {
+        sgdDimensions['print_width'] = await ZebraPrinter.getSgdParameter('ezpl.print_width');
+        sgdDimensions['label_length_max'] = await ZebraPrinter.getSgdParameter('ezpl.label_length_max');
+        sgdDimensions['media_width'] = await ZebraPrinter.getSgdParameter('media.width');
+        sgdDimensions['media_length'] = await ZebraPrinter.getSgdParameter('media.length');
+        print('[Flutter] SGD dimensions: $sgdDimensions');
+      } catch (e) {
+        print('[Flutter] Could not read SGD parameters: $e');
+      }
+      
+      if (!mounted) return;
+      
+      final width = dimensions['printWidthInDots'] ?? 0;
+      final height = dimensions['labelLengthInDots'] ?? 0;
+      final dpi = dimensions['dpi'] ?? 203;
+      final maxWidth = dimensions['maxPrintWidthInDots'] ?? 0;
+      final mediaWidth = dimensions['mediaWidthInDots'] ?? 0;
+      
+      final widthInches = width / dpi;
+      final heightInches = height / dpi;
+      
+      // Show both sets of dimensions in the dialog
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Printer Dimensions'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Built-in Method:', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('Print Width: $width dots (${widthInches.toStringAsFixed(2)}")'),
+              Text('Label Length: $height dots (${heightInches.toStringAsFixed(2)}")'),
+              Text('DPI: $dpi'),
+              Text('Max Print Width: $maxWidth dots'),
+              Text('Media Width: $mediaWidth dots'),
+              const SizedBox(height: 16),
+              const Text('SGD Parameters:', style: TextStyle(fontWeight: FontWeight.bold)),
+              ...sgdDimensions.entries.map((entry) {
+                return Text('${entry.key}: ${entry.value ?? "null"}', 
+                  style: const TextStyle(fontFamily: 'monospace'));
+              }).toList(),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Current dimensions: ${widthInches.toStringAsFixed(1)}" x ${heightInches.toStringAsFixed(1)}" (${width}x${height} dots)')),
+      );
+    } catch (e) {
+      print('[Flutter] Failed to get printer dimensions: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to get dimensions: $e')),
+      );
+    }
+  }
+
+  Future<void> _setZebraDimensionsUI() async {
+    if (!_isConnected || _selectedZebraPrinter == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    final widthController = TextEditingController();
+    final heightController = TextEditingController();
+
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Set Printer Dimensions'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter dimensions in inches:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: widthController,
+              decoration: const InputDecoration(
+                labelText: 'Width (inches)',
+                hintText: 'e.g. 2.20',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: heightController,
+              decoration: const InputDecoration(
+                labelText: 'Height (inches)',
+                hintText: 'e.g. 1.04',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final width = widthController.text.trim();
+              final height = heightController.text.trim();
+              if (width.isNotEmpty && height.isNotEmpty) {
+                Navigator.of(context).pop({'width': width, 'height': height});
+              }
+            },
+            child: const Text('Set'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return;
+
+    try {
+      final width = result['width']!;
+      final height = result['height']!;
+      
+      print('[Flutter] Setting printer dimensions to ${width}x$height inches...');
+      
+      // Get current DPI and dimensions to convert inches to dots
+      final dimensions = await ZebraPrinter.getPrinterDimensions();
+      final dpi = 203; // Default to 203 DPI if not available
+      final currentWidthDots = dimensions['printWidthInDots'] ?? 448;
+      
+      // Convert target inches to dots
+      final targetWidthInDots = (double.parse(width) * dpi).round();
+      
+      print('[Flutter] Current width: $currentWidthDots dots, Target width: $targetWidthInDots dots');
+      
+      // Smart width setting: step up gradually if increasing width significantly
+      if (targetWidthInDots > currentWidthDots) {
+        final widthDifference = targetWidthInDots - currentWidthDots;
+        if (widthDifference > 100) { // If jumping more than ~0.5 inches
+          print('[Flutter] Large width increase detected, stepping up gradually...');
+          
+          // Step up in increments of ~100 dots (~0.5 inches)
+          int stepWidth = currentWidthDots;
+          while (stepWidth < targetWidthInDots) {
+            stepWidth = (stepWidth + 100).clamp(currentWidthDots, targetWidthInDots);
+            
+            print('[Flutter] Setting intermediate width: $stepWidth dots');
+            await ZebraPrinter.setSgdParameter('ezpl.print_width', stepWidth.toString());
+            
+            // Small delay between steps
+            await Future.delayed(const Duration(milliseconds: 200));
+          }
+        }
+      }
+      
+      // Set final width
+      await ZebraPrinter.setSgdParameter('ezpl.print_width', targetWidthInDots.toString());
+      print('[Flutter] Set ezpl.print_width to $targetWidthInDots dots');
+      
+      // Set the label length using ZPL ^LL command for immediate effect (in dots)
+      final heightInDots = (double.parse(height) * dpi).round();
+      await ZebraPrinter.setLabelLength(heightInDots);
+      print('[Flutter] Set label length to $heightInDots dots (${height}") using ZPL ^LL command');
+      
+      // Set label length max using SGD command (in inches)
+      await ZebraPrinter.setSgdParameter('ezpl.label_length_max', height);
+      print('[Flutter] Set ezpl.label_length_max to $height inches');
+      
+      // Skip immediate verification as it may not reflect changes immediately
+      // The native logs show commands are sent successfully
+      print('[Flutter] Dimension setting commands sent successfully');
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Set dimensions: ${width}" x ${height}" ($targetWidthInDots x $heightInDots dots)')),
+      );
+      
+      // Update the connected printer object with new dimensions
+      if (_connectedZebraPrinter != null) {
+        _connectedZebraPrinter = ConnectedPrinter(
+          discoveredPrinter: _connectedZebraPrinter!.discoveredPrinter,
+          printWidthInDots: targetWidthInDots,
+          labelLengthInDots: heightInDots,
+          dpi: _connectedZebraPrinter!.dpi ?? dpi, // Keep existing DPI or use current
+          maxPrintWidthInDots: _connectedZebraPrinter!.maxPrintWidthInDots,
+          mediaWidthInDots: _connectedZebraPrinter!.mediaWidthInDots,
+          connectedAt: _connectedZebraPrinter!.connectedAt,
+        );
+        print('[Flutter] Updated connected printer dimensions: ${_connectedZebraPrinter.toString()}');
+      }
+      
+      print('[Flutter] Successfully set printer dimensions');
+    } catch (e) {
+      print('[Flutter] Failed to set printer dimensions: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to set dimensions: $e')),
+      );
+    }
+  }
+
   Future<void> _getZebraStatus() async {
     if (!_isConnected || _selectedZebraPrinter == null) {
       setState(() => _printerStatus = 'Not connected');
@@ -2846,6 +3154,64 @@ class _MyHomePageState extends State<MyHomePage> {
 
               ],
             ),
+            
+            // Zebra-specific controls
+            if (_selectedBrand == PrinterBrand.zebra) ...[
+              const SizedBox(height: 16),
+              
+              // MAC Address input for Android BTLE connection
+              if (Platform.isAndroid) ...[
+                const Text('Printer MAC Address (for BTLE):', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _zebraMacAddressController,
+                  decoration: const InputDecoration(
+                    hintText: '00:07:4D:XX:XX:XX',
+                    border: OutlineInputBorder(),
+                    labelText: 'MAC Address',
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _zebraMacAddress = value.trim();
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                
+                // Direct BLE connection button
+                ElevatedButton.icon(
+                  onPressed: (_isDiscovering || _zebraMacAddress.isEmpty) ? null : _testDirectBleConnection,
+                  icon: const Icon(Icons.bluetooth),
+                  label: const Text('BTLE (MAC)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              
+              // Dimensions controls
+              const Text('Printer Dimensions:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _isConnected ? _getZebraDimensionsUI : null,
+                    icon: const Icon(Icons.straighten),
+                    label: const Text('Get Dimensions'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _isConnected ? _setZebraDimensionsUI : null,
+                    icon: const Icon(Icons.settings),
+                    label: const Text('Set Dimensions'),
+                  ),
+                ],
+              ),
+            ],
             
             const SizedBox(height: 8),
             

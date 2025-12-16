@@ -576,20 +576,46 @@ class _MyHomePageState extends State<MyHomePage> {
       await ZebraPrinter.connect(settings);
       print('[Flutter] Connection successful');
       
+      // Add small delay to ensure connection is fully established
+      await Future.delayed(const Duration(milliseconds: 500));
+      
       // Auto-fetch printer dimensions after successful connection
       try {
         print('[Flutter] Fetching printer dimensions after connection...');
         final dimensions = await ZebraPrinter.getPrinterDimensions();
+        print('[Flutter] Raw dimensions received: $dimensions');
         
-        _connectedPrinter = ConnectedPrinter(
-          discoveredPrinter: _selectedPrinter!,
-          printWidthInDots: dimensions['printWidthInDots'],
-          labelLengthInDots: dimensions['labelLengthInDots'], 
-          dpi: dimensions['dpi'],
-          maxPrintWidthInDots: dimensions['maxPrintWidthInDots'],
-          mediaWidthInDots: dimensions['mediaWidthInDots'],
-          connectedAt: DateTime.now(),
-        );
+        // Validate that we got reasonable dimensions for a ZD421/ZD410
+        final printWidth = dimensions['printWidthInDots'] ?? 0;
+        final labelLength = dimensions['labelLengthInDots'] ?? 0;
+        final dpi = dimensions['dpi'] ?? 203;
+        
+        if (printWidth < 100 || labelLength < 100) {
+          print('[Flutter] Warning: Dimensions seem invalid, retrying...');
+          await Future.delayed(const Duration(milliseconds: 300));
+          final retryDimensions = await ZebraPrinter.getPrinterDimensions();
+          print('[Flutter] Retry dimensions: $retryDimensions');
+          
+          _connectedPrinter = ConnectedPrinter(
+            discoveredPrinter: _selectedPrinter!,
+            printWidthInDots: retryDimensions['printWidthInDots'],
+            labelLengthInDots: retryDimensions['labelLengthInDots'], 
+            dpi: retryDimensions['dpi'],
+            maxPrintWidthInDots: retryDimensions['maxPrintWidthInDots'],
+            mediaWidthInDots: retryDimensions['mediaWidthInDots'],
+            connectedAt: DateTime.now(),
+          );
+        } else {
+          _connectedPrinter = ConnectedPrinter(
+            discoveredPrinter: _selectedPrinter!,
+            printWidthInDots: dimensions['printWidthInDots'],
+            labelLengthInDots: dimensions['labelLengthInDots'], 
+            dpi: dimensions['dpi'],
+            maxPrintWidthInDots: dimensions['maxPrintWidthInDots'],
+            mediaWidthInDots: dimensions['mediaWidthInDots'],
+            connectedAt: DateTime.now(),
+          );
+        }
         
         print('[Flutter] Connected printer dimensions: ${_connectedPrinter.toString()}');
       } catch (dimensionError) {
@@ -875,10 +901,24 @@ class _MyHomePageState extends State<MyHomePage> {
 
     try {
       print('[Flutter] Getting printer dimensions...');
+      
+      // Try both methods - the built-in method and direct SGD reading
       final dimensions = await ZebraPrinter.getPrinterDimensions();
-      print('[Flutter] Printer dimensions: $dimensions');
+      print('[Flutter] Built-in method dimensions: $dimensions');
+      
+      // Also try reading dimensions directly via SGD parameters
+      Map<String, String?> sgdDimensions = {};
+      try {
+        sgdDimensions['print_width'] = await ZebraPrinter.getSgdParameter('ezpl.print_width');
+        sgdDimensions['label_length_max'] = await ZebraPrinter.getSgdParameter('ezpl.label_length_max');
+        sgdDimensions['media_width'] = await ZebraPrinter.getSgdParameter('media.width');
+        sgdDimensions['media_length'] = await ZebraPrinter.getSgdParameter('media.length');
+        print('[Flutter] SGD dimensions: $sgdDimensions');
+      } catch (e) {
+        print('[Flutter] Could not read SGD parameters: $e');
+      }
 
-      // Show dimensions in a dialog
+      // Show both sets of dimensions in the dialog
       if (!mounted) return;
       showDialog(
         context: context,
@@ -888,13 +928,25 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
-              children: dimensions.entries.map((entry) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2.0),
-                  child: Text('${entry.key}: ${entry.value}', 
-                    style: const TextStyle(fontFamily: 'monospace')),
-                );
-              }).toList(),
+              children: [
+                const Text('Built-in Method:', style: TextStyle(fontWeight: FontWeight.bold)),
+                ...dimensions.entries.map((entry) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2.0),
+                    child: Text('${entry.key}: ${entry.value}', 
+                      style: const TextStyle(fontFamily: 'monospace')),
+                  );
+                }).toList(),
+                const SizedBox(height: 16),
+                const Text('SGD Parameters:', style: TextStyle(fontWeight: FontWeight.bold)),
+                ...sgdDimensions.entries.map((entry) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2.0),
+                    child: Text('${entry.key}: ${entry.value ?? "null"}', 
+                      style: const TextStyle(fontFamily: 'monospace')),
+                  );
+                }).toList(),
+              ],
             ),
           ),
           actions: [
@@ -981,47 +1033,63 @@ class _MyHomePageState extends State<MyHomePage> {
       
       print('[Flutter] Setting printer dimensions to ${width}x$height inches...');
       
-      // Get current DPI to convert inches to dots
+      // Get current DPI and dimensions to convert inches to dots
       final dimensions = await ZebraPrinter.getPrinterDimensions();
       final dpi = 203;//dimensions['dpi'] ?? 203; // Default to 203 DPI if not available
+      final currentWidthDots = dimensions['printWidthInDots'] ?? 448;
       
-      // Convert inches to dots for width
-      final widthInDots = (double.parse(width) * dpi).round();
+      // Convert target inches to dots
+      final targetWidthInDots = (double.parse(width) * dpi).round();
       
-      print('[Flutter] Converting to dots: ${width}" = $widthInDots dots (at $dpi DPI)');
+      print('[Flutter] Current width: $currentWidthDots dots, Target width: $targetWidthInDots dots');
       
-      // Set the print width using SGD command (in dots)
-      await ZebraPrinter.setSgdParameter('ezpl.print_width', widthInDots.toString());
-      print('[Flutter] Set ezpl.print_width to $widthInDots dots');
+      // Smart width setting: step up gradually if increasing width significantly
+      if (targetWidthInDots > currentWidthDots) {
+        final widthDifference = targetWidthInDots - currentWidthDots;
+        if (widthDifference > 100) { // If jumping more than ~0.5 inches
+          print('[Flutter] Large width increase detected, stepping up gradually...');
+          
+          // Step up in increments of ~100 dots (~0.5 inches)
+          int stepWidth = currentWidthDots;
+          while (stepWidth < targetWidthInDots) {
+            stepWidth = (stepWidth + 100).clamp(currentWidthDots, targetWidthInDots);
+            
+            print('[Flutter] Setting intermediate width: $stepWidth dots');
+            await ZebraPrinter.setSgdParameter('ezpl.print_width', stepWidth.toString());
+            
+            // Small delay between steps
+            await Future.delayed(const Duration(milliseconds: 200));
+          }
+        }
+      }
+      
+      // Set final width
+      await ZebraPrinter.setSgdParameter('ezpl.print_width', targetWidthInDots.toString());
+      print('[Flutter] Set ezpl.print_width to $targetWidthInDots dots');
       
       // Set the label length using ZPL ^LL command for immediate effect (in dots)
       final heightInDots = (double.parse(height) * dpi).round();
       await ZebraPrinter.setLabelLength(heightInDots);
       print('[Flutter] Set label length to $heightInDots dots (${height}") using ZPL ^LL command');
       
-      // Also set the label length max using SGD command (in inches, as per spec)
+      // Set label length max using SGD command (in inches)
       await ZebraPrinter.setSgdParameter('ezpl.label_length_max', height);
       print('[Flutter] Set ezpl.label_length_max to $height inches');
       
-      // Verify the settings were applied
-      try {
-        final newPrintWidth = await ZebraPrinter.getSgdParameter('ezpl.print_width');
-        final newLabelLength = await ZebraPrinter.getSgdParameter('ezpl.label_length_max');
-        print('[Flutter] Verification - print_width: $newPrintWidth, label_length_max: $newLabelLength');
-      } catch (e) {
-        print('[Flutter] Could not verify settings: $e');
-      }
+      // Skip immediate verification as it may not reflect changes immediately
+      // The native logs show commands are sent successfully
+      print('[Flutter] Dimension setting commands sent successfully');
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Set dimensions: ${width}" x ${height}" ($widthInDots x $heightInDots dots)')),
+        SnackBar(content: Text('Set dimensions: ${width}" x ${height}" ($targetWidthInDots x $heightInDots dots)')),
       );
       
       // Update the connected printer object with new dimensions
       if (_connectedPrinter != null) {
         _connectedPrinter = ConnectedPrinter(
           discoveredPrinter: _connectedPrinter!.discoveredPrinter,
-          printWidthInDots: widthInDots,
+          printWidthInDots: targetWidthInDots,
           labelLengthInDots: heightInDots,
           dpi: _connectedPrinter!.dpi ?? dpi, // Keep existing DPI or use current
           maxPrintWidthInDots: _connectedPrinter!.maxPrintWidthInDots,
@@ -1031,7 +1099,7 @@ class _MyHomePageState extends State<MyHomePage> {
         print('[Flutter] Updated connected printer dimensions: ${_connectedPrinter.toString()}');
       }
       
-      print('[Flutter] Successfully set printer width');
+      print('[Flutter] Successfully set printer dimensions');
     } catch (e) {
       print('[Flutter] Failed to set printer dimensions: $e');
       if (!mounted) return;
