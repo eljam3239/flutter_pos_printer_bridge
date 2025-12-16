@@ -477,6 +477,34 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
+  zebra_printer:
+    dependency: "direct main"
+    description:
+      path: "packages/zebra/zebra_printer"
+      relative: true
+    source: path
+    version: "1.0.0"
+  zebra_printer_android:
+    dependency: transitive
+    description:
+      path: "packages/zebra/zebra_printer_android"
+      relative: true
+    source: path
+    version: "1.0.0"
+  zebra_printer_ios:
+    dependency: transitive
+    description:
+      path: "packages/zebra/zebra_printer_ios"
+      relative: true
+    source: path
+    version: "1.0.0"
+  zebra_printer_platform_interface:
+    dependency: transitive
+    description:
+      path: "packages/zebra/zebra_printer_platform_interface"
+      relative: true
+    source: path
+    version: "1.0.0"
 sdks:
   dart: ">=3.8.1 <4.0.0"
   flutter: ">=3.29.0"

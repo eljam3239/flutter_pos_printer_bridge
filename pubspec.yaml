@@ -49,6 +49,10 @@ dependencies:
   star_printer:
     path: packages/star/star_printer
 
+  # Zebra printer plugin
+  zebra_printer:
+    path: packages/zebra/zebra_printer
+
 
 dev_dependencies:
   flutter_test:
