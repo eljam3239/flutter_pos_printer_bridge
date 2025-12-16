@@ -3101,6 +3101,20 @@ class _MyHomePageState extends State<MyHomePage> {
                 onChanged: (String? newValue) {
                   setState(() {
                     _selectedPrinter = newValue;
+                    
+                    // Update the Zebra-specific selected printer when brand is Zebra
+                    if (_selectedBrand == PrinterBrand.zebra && newValue != null) {
+                      // Find the corresponding DiscoveredPrinter object from the string
+                      // Format: '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}'
+                      try {
+                        _selectedZebraPrinter = _zebraDiscoveredPrinters.firstWhere(
+                          (printer) => '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}' == newValue,
+                        );
+                      } catch (e) {
+                        // If no match found, keep the current selection or use first available
+                        _selectedZebraPrinter = _zebraDiscoveredPrinters.isNotEmpty ? _zebraDiscoveredPrinters.first : null;
+                      }
+                    }
                   });
                 },
               ),
