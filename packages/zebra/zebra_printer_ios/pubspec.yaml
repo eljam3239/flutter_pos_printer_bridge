@@ -1,0 +1,19 @@
+name: zebra_printer_ios
+description: iOS implementation of the zebra_printer plugin.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+flutter:
+  plugin:
+    implements: zebra_printer
+    platforms:
+      ios:
+        pluginClass: ZebraPrinterIosPlugin
+
+dependencies:
+  flutter:
+    sdk: flutter

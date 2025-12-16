@@ -53,5 +53,9 @@ packages/epson/epson_printer_ios/ePOS2_Discovery
 #star related
 packages/star/star_printer_ios/ios/StarIO10.xcframework
 
+#zebra related
+packages/zebra/zebra_printer_android/android/libs
+packages/zebra/zebra_printer_ios/ios/Frameworks
+
 #build ?
 ios/build

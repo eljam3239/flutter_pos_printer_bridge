@@ -1,0 +1,20 @@
+name: zebra_printer_android
+description: Android implementation of the zebra_printer plugin.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+flutter:
+  plugin:
+    implements: zebra_printer
+    platforms:
+      android:
+        package: com.zebra.zebra_printer_android
+        pluginClass: ZebraPrinterAndroidPlugin
+
+dependencies:
+  flutter:
+    sdk: flutter

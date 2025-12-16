@@ -1,0 +1,30 @@
+name: zebra_printer
+description: A Flutter plugin for Zebra printers with support for iOS and Android.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  zebra_printer_platform_interface:
+    path: ../zebra_printer_platform_interface
+  zebra_printer_ios:
+    path: ../zebra_printer_ios
+  zebra_printer_android:
+    path: ../zebra_printer_android
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        default_package: zebra_printer_ios
+      android:
+        default_package: zebra_printer_android
