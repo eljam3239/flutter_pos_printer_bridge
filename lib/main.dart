@@ -1791,10 +1791,17 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // Add cashier if provided
     if (receiptData.cashierName != null) {
+      // Position cashier name to avoid cutoff - use right-aligned positioning
+      String cashierText = "Cashier: ${receiptData.cashierName}";
+      int cashierCharWidth = getCharWidthInDots(30, dpi);
+      int estimatedCashierWidth = cashierText.length * cashierCharWidth;
+      int cashierX = (width - estimatedCashierWidth - 20); // 20 dot right margin
+      cashierX = cashierX.clamp(20, width - estimatedCashierWidth); // Ensure minimum left margin
+      
       receiptZpl += '''
 ^CF0,30
-^FO470,478
-^FDCashier: ${receiptData.cashierName}^FS''';
+^FO$cashierX,478
+^FD$cashierText^FS''';
     }
 
     // Add lane if provided
@@ -1856,7 +1863,7 @@ class _MyHomePageState extends State<MyHomePage> {
     String totalText = "Total: \$${total.toStringAsFixed(2)}";
     int estimatedTotalWidth = totalText.length * totalCharWidth;
     int totalX = (width - estimatedTotalWidth) ~/ 2;
-    totalX = totalX.clamp(0, width - estimatedTotalWidth);
+    totalX = totalX.clamp(20, width - estimatedTotalWidth - 20); // Add margins
     
     receiptZpl += '''
 ^CF0,35
