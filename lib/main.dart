@@ -6,7 +6,8 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:epson_printer/epson_printer.dart';
-import 'package:star_printer/star_printer.dart';
+import 'package:star_printer/star_printer.dart' as star;
+import 'package:zebra_printer/zebra_printer.dart';
 void main() {
   runApp(const MyApp());
 }
@@ -76,6 +77,29 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _epsonLabelSizeColourController = TextEditingController();
   final TextEditingController _epsonLabelScancodeController = TextEditingController();
   
+  // Zebra printer specific state
+  List<DiscoveredPrinter> _zebraDiscoveredPrinters = [];
+  DiscoveredPrinter? _selectedZebraPrinter;
+  ConnectedPrinter? _connectedZebraPrinter;
+  int _zebraLabelQuantity = 1;
+  
+  // Zebra label content controllers
+  final TextEditingController _zebraLabelProductNameController = TextEditingController();
+  final TextEditingController _zebraLabelColorSizeController = TextEditingController();
+  final TextEditingController _zebraLabelScancodeController = TextEditingController();
+  final TextEditingController _zebraLabelPriceController = TextEditingController();
+  
+  // Zebra receipt form controllers
+  final TextEditingController _zebraStoreNameController = TextEditingController();
+  final TextEditingController _zebraStoreAddressController = TextEditingController();
+  final TextEditingController _zebraStorePhoneController = TextEditingController();
+  final TextEditingController _zebraReceiptNumberController = TextEditingController();
+  final TextEditingController _zebraCashierNameController = TextEditingController();
+  final TextEditingController _zebraLaneNumberController = TextEditingController();
+  final TextEditingController _zebraThankYouMessageController = TextEditingController();
+  List<Map<String, TextEditingController>> _zebraLineItemControllers = [];
+  bool _zebraShowReceiptForm = false;
+  
   // Receipt content controllers
   final TextEditingController _headerController = TextEditingController();
   final TextEditingController _detailsController = TextEditingController();
@@ -131,6 +155,22 @@ class _MyHomePageState extends State<MyHomePage> {
     _epsonLabelPriceController.text = '\$5.00';
     _epsonLabelSizeColourController.text = 'Small Turquoise';
     _epsonLabelScancodeController.text = '123456789';
+    
+    // Initialize Zebra controllers
+    _zebraLabelProductNameController.text = 'T-Shirt';
+    _zebraLabelColorSizeController.text = 'Small Turquoise';
+    _zebraLabelScancodeController.text = '123456789';
+    _zebraLabelPriceController.text = '\$5.00';
+    
+    // Initialize Zebra receipt controllers
+    _zebraStoreNameController.text = 'My Store';
+    _zebraStoreAddressController.text = '123 Main Street, City, State';
+    _zebraStorePhoneController.text = '(555) 123-4567';
+    _zebraReceiptNumberController.text = '12345';
+    _zebraCashierNameController.text = 'John Doe';
+    _zebraLaneNumberController.text = '1';
+    _zebraThankYouMessageController.text = 'Thank you for shopping with us!';
+    _addZebraLineItem(); // Add initial line item
   }
 
   @override
@@ -144,6 +184,27 @@ class _MyHomePageState extends State<MyHomePage> {
     _epsonLabelPriceController.dispose();
     _epsonLabelSizeColourController.dispose();
     _epsonLabelScancodeController.dispose();
+    
+    // Dispose Zebra controllers
+    _zebraLabelProductNameController.dispose();
+    _zebraLabelColorSizeController.dispose();
+    _zebraLabelScancodeController.dispose();
+    _zebraLabelPriceController.dispose();
+    _zebraStoreNameController.dispose();
+    _zebraStoreAddressController.dispose();
+    _zebraStorePhoneController.dispose();
+    _zebraReceiptNumberController.dispose();
+    _zebraCashierNameController.dispose();
+    _zebraLaneNumberController.dispose();
+    _zebraThankYouMessageController.dispose();
+    
+    // Dispose Zebra line item controllers
+    for (var controllerMap in _zebraLineItemControllers) {
+      controllerMap['quantity']?.dispose();
+      controllerMap['item']?.dispose();
+      controllerMap['price']?.dispose();
+    }
+    
     _statePollTimer?.cancel();
     super.dispose();
   }
@@ -214,6 +275,238 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  // Zebra helper methods
+  void _addZebraLineItem() {
+    setState(() {
+      _zebraLineItemControllers.add({
+        'quantity': TextEditingController(),
+        'item': TextEditingController(),
+        'price': TextEditingController(),
+      });
+    });
+  }
+
+  void _removeZebraLineItem(int index) {
+    if (_zebraLineItemControllers.length > 1) {
+      setState(() {
+        _zebraLineItemControllers[index]['quantity']?.dispose();
+        _zebraLineItemControllers[index]['item']?.dispose();
+        _zebraLineItemControllers[index]['price']?.dispose();
+        _zebraLineItemControllers.removeAt(index);
+      });
+    }
+  }
+
+  void _clearZebraDiscoveries() {
+    if (_isConnected && _selectedBrand == PrinterBrand.zebra) {
+      _disconnectFromPrinter();
+    }
+    
+    setState(() {
+      _zebraDiscoveredPrinters.clear();
+      _selectedZebraPrinter = null;
+      _connectedZebraPrinter = null;
+    });
+    
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Cleared Zebra printer discoveries')),
+    );
+  }
+
+  // Zebra comprehensive discovery method from zebramain.dart
+  Future<void> _discoverZebraAll() async {
+    // Clear discoveries at the beginning of the comprehensive discovery
+    setState(() {
+      _zebraDiscoveredPrinters.clear();
+      _discoveredPrinters = <String>[];
+      _selectedPrinter = null;
+      _selectedZebraPrinter = null;
+    });
+    
+    //if iOS, skip USB discovery
+    if (Platform.isIOS) {
+      await _discoverZebraNetworkPrintersAuto();
+      await _discoverZebraBluetoothPrinters();
+      return;
+    } else {
+      // Android - do all discoveries
+      await _discoverZebraUsbPrinters();
+      await _discoverZebraNetworkPrintersAuto();
+      await _discoverZebraBluetoothPrinters();
+      return;
+    }
+  }
+
+  Future<void> _discoverZebraNetworkPrintersAuto() async {
+    setState(() {
+      _isDiscovering = true;
+    });
+
+    try {
+      print('[Flutter] Starting automatic network discovery...');
+      final printers = await ZebraPrinter.discoverPrinters();
+      print('[Flutter] Auto discovery completed. Found ${printers.length} printers');
+      
+      setState(() {
+        // Add new printers - allow duplicates for different interfaces
+        _zebraDiscoveredPrinters.addAll(printers);
+        
+        // Convert to compatible format for _discoveredPrinters
+        final zebraAddresses = _zebraDiscoveredPrinters
+            .map((printer) => '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}')
+            .toList();
+        _discoveredPrinters = zebraAddresses;
+        
+        _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+        _selectedZebraPrinter = _zebraDiscoveredPrinters.isNotEmpty ? _zebraDiscoveredPrinters.first : null;
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Auto discovery found ${printers.length} printers')),
+      );
+    } catch (e) {
+      print('[Flutter] Auto discovery failed: $e');
+      setState(() {
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Auto discovery failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _discoverZebraBluetoothPrinters() async {
+    setState(() {
+      _isDiscovering = true;
+    });
+
+    try {
+      print('[Flutter] Starting Bluetooth LE discovery...');
+      final printers = await ZebraPrinter.discoverBluetoothPrinters();
+      print('[Flutter] Bluetooth discovery completed. Found ${printers.length} printers');
+      
+      setState(() {
+        // Merge with existing discoveries - allow duplicates for different interfaces
+        _zebraDiscoveredPrinters.addAll(printers);
+        
+        // Convert to compatible format for _discoveredPrinters
+        final zebraAddresses = _zebraDiscoveredPrinters
+            .map((printer) => '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}')
+            .toList();
+        _discoveredPrinters = zebraAddresses;
+        
+        _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+        _selectedZebraPrinter = _zebraDiscoveredPrinters.isNotEmpty ? _zebraDiscoveredPrinters.first : null;
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bluetooth found ${printers.length} printers')),
+      );
+    } catch (e) {
+      print('[Flutter] Bluetooth discovery failed: $e');
+      setState(() {
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      
+      String errorMessage = 'Bluetooth discovery failed: $e';
+      
+      // Check if it's a permissions error and provide helpful guidance
+      if (e.toString().contains('MISSING_PERMISSIONS') || e.toString().contains('permission')) {
+        errorMessage = 'Bluetooth permissions required!\n\n'
+            'Please go to Settings > Apps > Flutter Zebra > Permissions '
+            'and enable:\n• Nearby devices (Bluetooth)\n• Location\n\n'
+            'Then restart the app and try again.';
+      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'OK',
+            onPressed: () {},
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _discoverZebraUsbPrinters() async {
+    // Check if running on iOS
+    if (Platform.isIOS) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('iOS doesn\'t support USB discovery or printing'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // Android implementation - discover USB printers
+    setState(() {
+      _isDiscovering = true;
+    });
+
+    try {
+      print('[Flutter] Starting USB printer discovery...');
+      final printers = await ZebraPrinter.discoverUsbPrinters();
+      print('[Flutter] USB discovery completed. Found ${printers.length} printers');
+      
+      setState(() {
+        // Add new USB printers - allow duplicates for different interfaces
+        _zebraDiscoveredPrinters.addAll(printers);
+        
+        // Convert to compatible format for _discoveredPrinters
+        final zebraAddresses = _zebraDiscoveredPrinters
+            .map((printer) => '${printer.friendlyName ?? printer.address}:${printer.address}:${printer.interfaceType.toUpperCase()}')
+            .toList();
+        _discoveredPrinters = zebraAddresses;
+        
+        // Preserve selected printer reference if it still exists
+        if (_selectedZebraPrinter != null) {
+          final matchingPrinter = _zebraDiscoveredPrinters
+              .where((p) => p.address == _selectedZebraPrinter!.address && p.interfaceType == _selectedZebraPrinter!.interfaceType)
+              .firstOrNull;
+          _selectedZebraPrinter = matchingPrinter;
+          if (_selectedZebraPrinter != null) {
+            final matchingAddress = zebraAddresses
+                .where((addr) => addr.contains(_selectedZebraPrinter!.address))
+                .firstOrNull;
+            _selectedPrinter = matchingAddress;
+          }
+        }
+        
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('USB discovery found ${printers.length} printers')),
+      );
+    } catch (e) {
+      print('[Flutter] USB discovery failed: $e');
+      setState(() {
+        _isDiscovering = false;
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('USB discovery failed: $e')),
+      );
+    }
+  }
+
   // Placeholder methods that will be wired to specific printer implementations later
   Future<void> _discoverPrinters() async {
     if (_selectedBrand == null) {
@@ -274,7 +567,7 @@ class _MyHomePageState extends State<MyHomePage> {
               }
             }
             
-            final printers = await StarPrinter.discoverPrinters();
+            final printers = await star.StarPrinter.discoverPrinters();
             print('DEBUG: Discovery result: $printers');
             setState(() {
               _discoveredPrinters = List<String>.from(printers); // Create growable list
@@ -302,11 +595,7 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           break;
         case PrinterBrand.zebra:
-          // TODO: Implement Zebra discovery when available
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Zebra printer discovery not yet implemented')),
-          );
+          await _discoverZebraAll();
           break;
       }
     } catch (e) {
@@ -547,7 +836,7 @@ class _MyHomePageState extends State<MyHomePage> {
             // Disconnect from current printer if connected
             if (_isConnected) {
               print('DEBUG: Disconnecting from current printer before new connection...');
-              await StarPrinter.disconnect();
+              await star.StarPrinter.disconnect();
               setState(() {
                 _isConnected = false;
               });
@@ -558,38 +847,38 @@ class _MyHomePageState extends State<MyHomePage> {
             final printerString = _selectedPrinter!; // Use selected printer instead of first
             
             // Parse the printer string to determine interface type
-            StarInterfaceType interfaceType;
+            star.StarInterfaceType interfaceType;
             String identifier;
             
             if (printerString.startsWith('LAN:')) {
-              interfaceType = StarInterfaceType.lan;
+              interfaceType = star.StarInterfaceType.lan;
               // Extract just the identifier part (MAC address or IP), ignore model info
               final parts = printerString.substring(4).split(':');
               identifier = parts[0]; // Take first part before any model info
             } else if (printerString.startsWith('BT:')) {
-              interfaceType = StarInterfaceType.bluetooth;
+              interfaceType = star.StarInterfaceType.bluetooth;
               final parts = printerString.substring(3).split(':');
               identifier = parts[0]; // Take first part before any model info
             } else if (printerString.startsWith('BLE:')) {
-              interfaceType = StarInterfaceType.bluetoothLE;
+              interfaceType = star.StarInterfaceType.bluetoothLE;
               final parts = printerString.substring(4).split(':');
               identifier = parts[0]; // Take first part before any model info
             } else if (printerString.startsWith('USB:')) {
-              interfaceType = StarInterfaceType.usb;
+              interfaceType = star.StarInterfaceType.usb;
               final parts = printerString.substring(4).split(':');
               identifier = parts[0]; // Take first part before any model info
             } else {
-              interfaceType = StarInterfaceType.lan;
+              interfaceType = star.StarInterfaceType.lan;
               identifier = printerString.split(':')[0]; // Take first part
             }
             
             print('DEBUG: Connecting to $interfaceType printer: $identifier (Selected: $printerString)');
             
-            final settings = StarConnectionSettings(
+            final settings = star.StarConnectionSettings(
               interfaceType: interfaceType,
               identifier: identifier,
             );
-            await StarPrinter.connect(settings);
+            await star.StarPrinter.connect(settings);
             setState(() {
               _isConnected = true;
             });
@@ -607,11 +896,120 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           break;
         case PrinterBrand.zebra:
-          // TODO: Implement Zebra connection when available
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Zebra printer connection not yet implemented')),
-          );
+          // Zebra connection implementation
+          try {
+            if (_selectedZebraPrinter == null) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Please select a Zebra printer first.')),
+              );
+              return;
+            }
+
+            // Force disconnect if already connected
+            if (_isConnected) {
+              print('[Flutter] Force disconnecting from current printer...');
+              try {
+                await ZebraPrinter.disconnect();
+                await Future.delayed(const Duration(milliseconds: 500));
+                setState(() {
+                  _isConnected = false;
+                  _printerStatus = 'Disconnected';
+                  _connectedZebraPrinter = null;
+                });
+              } catch (e) {
+                print('[Flutter] Error disconnecting: $e');
+                setState(() {
+                  _isConnected = false;
+                  _printerStatus = 'Disconnected';
+                  _connectedZebraPrinter = null;
+                });
+              }
+            }
+            
+            // Determine interface type for connection
+            ZebraInterfaceType interfaceType;
+            switch (_selectedZebraPrinter!.interfaceType.toLowerCase()) {
+              case 'bluetooth':
+                interfaceType = ZebraInterfaceType.bluetooth;
+                break;
+              case 'usb':
+                interfaceType = ZebraInterfaceType.usb;
+                break;
+              default:
+                interfaceType = ZebraInterfaceType.tcp;
+                break;
+            }
+            
+            final settings = ZebraConnectionSettings(
+              interfaceType: interfaceType,
+              identifier: _selectedZebraPrinter!.address,
+              timeout: 15000,
+            );
+
+            print('[Flutter] Connecting to Zebra printer: ${_selectedZebraPrinter!.address}');
+            await ZebraPrinter.connect(settings);
+            
+            // Fetch printer dimensions after connection
+            try {
+              final dimensions = await ZebraPrinter.getPrinterDimensions();
+              _connectedZebraPrinter = ConnectedPrinter(
+                discoveredPrinter: _selectedZebraPrinter!,
+                printWidthInDots: dimensions['printWidthInDots'],
+                labelLengthInDots: dimensions['labelLengthInDots'], 
+                dpi: dimensions['dpi'],
+                maxPrintWidthInDots: dimensions['maxPrintWidthInDots'],
+                mediaWidthInDots: dimensions['mediaWidthInDots'],
+                connectedAt: DateTime.now(),
+              );
+              print('[Flutter] Zebra printer dimensions: ${_connectedZebraPrinter.toString()}');
+            } catch (e) {
+              print('[Flutter] Warning: Could not fetch Zebra printer dimensions: $e');
+              _connectedZebraPrinter = ConnectedPrinter(
+                discoveredPrinter: _selectedZebraPrinter!,
+                connectedAt: DateTime.now(),
+              );
+            }
+            
+            setState(() {
+              _isConnected = true;
+              _printerStatus = 'Connected';
+            });
+
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connected to Zebra: ${_selectedZebraPrinter!.friendlyName ?? _selectedZebraPrinter!.address} [${_selectedZebraPrinter!.interfaceType.toUpperCase()}]')),
+            );
+          } catch (e) {
+            print('[Flutter] Zebra connection failed: $e');
+            setState(() {
+              _isConnected = false;
+              _printerStatus = 'Connection Failed';
+              _connectedZebraPrinter = null;
+            });
+
+            if (!mounted) return;
+            String errorMessage = 'Zebra connection failed: $e';
+            
+            // Provide specific guidance for Zebra connection issues
+            if (e.toString().contains('socket might closed') || 
+                e.toString().contains('read failed') ||
+                e.toString().contains('CONNECTION_FAILED')) {
+              errorMessage = 'Zebra connection failed!\n\n'
+                  'Try:\n• Check printer IP/MAC address\n'
+                  '• Ensure printer is powered on\n'
+                  '• Check network connectivity\n'
+                  '• For Bluetooth: ensure printer is in pairing mode\n\n'
+                  'Original error: $e';
+            }
+            
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(errorMessage),
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
           break;
       }
     } catch (e) {
@@ -646,11 +1044,7 @@ class _MyHomePageState extends State<MyHomePage> {
           await _printStarReceipt();
           break;
         case PrinterBrand.zebra:
-          // TODO: Implement Zebra printing when available
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Zebra printer printing not yet implemented')),
-          );
+          await _printZebraReceipt();
           break;
       }
     } catch (e) {
@@ -757,13 +1151,13 @@ class _MyHomePageState extends State<MyHomePage> {
         },
       };
 
-      final printJob = PrintJob(
+      final printJob = star.PrintJob(
         content: '',
         settings: layoutSettings,
       );
       
       print('DEBUG: Sending print job to printer...');
-      await StarPrinter.printReceipt(printJob);
+      await star.StarPrinter.printReceipt(printJob);
       
       print('DEBUG: Print job completed successfully');
       
@@ -771,7 +1165,7 @@ class _MyHomePageState extends State<MyHomePage> {
       if (_openDrawerAfterPrint && _isConnected) {
         try {
           print('DEBUG: Auto-opening cash drawer after print...');
-          await StarPrinter.openCashDrawer();
+          await star.StarPrinter.openCashDrawer();
           print('DEBUG: Auto cash drawer opened successfully');
         } catch (drawerError) {
           print('DEBUG: Auto cash drawer failed: $drawerError');
@@ -813,10 +1207,7 @@ class _MyHomePageState extends State<MyHomePage> {
         break;
       case PrinterBrand.zebra:
         // TODO: Implement Zebra label printing when available
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Zebra label printing not yet implemented')),
-        );
+        await _printZebraLabel();
         break;
     }
   }
@@ -884,7 +1275,7 @@ class _MyHomePageState extends State<MyHomePage> {
       
       final labelContent = '';
 
-      final printJob = PrintJob(
+      final printJob = star.PrintJob(
         content: labelContent,
         settings: labelSettings,
       );
@@ -899,7 +1290,7 @@ class _MyHomePageState extends State<MyHomePage> {
         
         try {
           // Try to print the label
-          await StarPrinter.printReceipt(printJob);
+          await star.StarPrinter.printReceipt(printJob);
           
           final printDuration = DateTime.now().difference(printStartTime);
           print('DEBUG: Label ${i + 1} completed in ${printDuration.inMilliseconds}ms');
@@ -928,7 +1319,7 @@ class _MyHomePageState extends State<MyHomePage> {
             while (!labelPrinted) {
               await Future.delayed(const Duration(milliseconds: 500));
               try {
-                await StarPrinter.printReceipt(printJob);
+                await star.StarPrinter.printReceipt(printJob);
                 labelPrinted = true;
                 print('DEBUG: Label ${i + 1} printed after paper removal');
               } catch (retryError) {
@@ -1082,6 +1473,740 @@ class _MyHomePageState extends State<MyHomePage> {
     ));
     
     return commands;
+  }
+
+  Future<void> _printZebraReceipt() async {
+    if (!_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    try {
+      if (_connectedZebraPrinter == null) {
+        throw Exception('No connected Zebra printer information available');
+      }
+      
+      // Use actual detected dimensions, with fallbacks
+      final width = _connectedZebraPrinter!.printWidthInDots ?? 386; // fallback to ZD410 width
+      final height = _connectedZebraPrinter!.labelLengthInDots ?? 212; // fallback to common label height
+      final dpi = _connectedZebraPrinter!.dpi ?? 203; // fallback to common Zebra DPI
+      
+      print('[Flutter] Using Zebra printer dimensions: ${width}x${height} @ ${dpi}dpi');
+      
+      // Build receipt data from form inputs
+      ReceiptData receiptData = await _buildZebraReceiptDataFromForm();
+      
+      // Generate ZPL for receipt
+      final receiptZpl = await _generateZebraReceiptZPL(width, height, dpi, receiptData);
+      
+      await ZebraPrinter.sendCommands(receiptZpl, language: ZebraPrintLanguage.zpl);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Zebra receipt sent successfully')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Zebra receipt print failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _printZebraLabel() async {
+    if (!_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    try {
+      if (_connectedZebraPrinter == null) {
+        throw Exception('No connected Zebra printer information available');
+      }
+      
+      // Use actual detected dimensions, with fallbacks
+      final width = _connectedZebraPrinter!.printWidthInDots ?? 386; // fallback to ZD410 width
+      final height = _connectedZebraPrinter!.labelLengthInDots ?? 212; // fallback to common label height
+      final dpi = _connectedZebraPrinter!.dpi ?? 203; // fallback to common Zebra DPI
+      
+      print('[Flutter] Using Zebra printer dimensions: ${width}x${height} @ ${dpi}dpi');
+      
+      // Create label data from form inputs
+      final labelData = LabelData(
+        productName: _zebraLabelProductNameController.text.trim().isNotEmpty 
+            ? _zebraLabelProductNameController.text.trim() 
+            : 'T-Shirt',
+        colorSize: _zebraLabelColorSizeController.text.trim().isNotEmpty 
+            ? _zebraLabelColorSizeController.text.trim() 
+            : 'Small Turquoise',
+        scancode: _zebraLabelScancodeController.text.trim().isNotEmpty 
+            ? _zebraLabelScancodeController.text.trim() 
+            : '123456789',
+        price: _zebraLabelPriceController.text.trim().isNotEmpty 
+            ? _zebraLabelPriceController.text.trim() 
+            : '\$5.00',
+      );
+      
+      // Generate ZPL with actual printer dimensions, DPI, and label data
+      String labelZpl = await _generateZebraLabelZPL(width, height, dpi, labelData);
+      
+      // Print labels based on quantity
+      for (int i = 0; i < _zebraLabelQuantity; i++) {
+        await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
+        
+        // Small delay between labels to prevent overwhelming the printer
+        if (i < _zebraLabelQuantity - 1) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$_zebraLabelQuantity Zebra label(s) sent successfully')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Zebra label print failed: $e')),
+      );
+    }
+  }
+
+  Future<LabelData> _buildZebraLabelDataFromForm() async {
+    return LabelData(
+      productName: _zebraLabelProductNameController.text,
+      colorSize: _zebraLabelColorSizeController.text,
+      scancode: _zebraLabelScancodeController.text,
+      price: _zebraLabelPriceController.text,
+    );
+  }
+
+  Future<ReceiptData> _buildZebraReceiptDataFromForm() async {
+    List<ReceiptLineItem> items = [];
+    for (int i = 0; i < _zebraLineItemControllers.length; i++) {
+      final quantity = int.tryParse(_zebraLineItemControllers[i]['quantity']!.text) ?? 1;
+      final itemName = _zebraLineItemControllers[i]['item']!.text;
+      final unitPrice = double.tryParse(_zebraLineItemControllers[i]['price']!.text) ?? 0.0;
+      
+      if (itemName.isNotEmpty) {
+        items.add(ReceiptLineItem(
+          quantity: quantity,
+          itemName: itemName,
+          unitPrice: unitPrice,
+        ));
+      }
+    }
+    
+    return ReceiptData(
+      storeName: _zebraStoreNameController.text,
+      storeAddress: _zebraStoreAddressController.text,
+      storePhone: _zebraStorePhoneController.text.isNotEmpty ? _zebraStorePhoneController.text : null,
+      cashierName: _zebraCashierNameController.text.isNotEmpty ? _zebraCashierNameController.text : null,
+      laneNumber: _zebraLaneNumberController.text.isNotEmpty ? _zebraLaneNumberController.text : null,
+      receiptNumber: _zebraReceiptNumberController.text.isNotEmpty ? _zebraReceiptNumberController.text : null,
+      transactionDate: DateTime.now(),
+      items: items,
+      thankYouMessage: _zebraThankYouMessageController.text.isNotEmpty ? _zebraThankYouMessageController.text : null,
+    );
+  }
+
+  // Generate label ZPL with given dimensions and label data
+  Future<String> _generateZebraLabelZPL(int width, int height, int dpi, LabelData labelData) async {
+    // Extract label content from the data object
+    String productName = labelData.productName;
+    String colorSize = labelData.colorSize;
+    String scancode = labelData.scancode;
+    String price = labelData.price;
+    
+    //paper details - use actual detected DPI instead of hardcoded value
+    int paperWidthDots = width; // use provided width in dots
+    
+    // Helper function to get character width in dots based on font size and DPI
+    int getCharWidthInDots(int fontSize, int dpi) {
+      // Based on empirical testing and Zebra font matrices
+      // Using a more conservative estimate that matches actual rendering
+      // Base character width scales roughly with font size
+      
+      if (fontSize <= 25) {
+        return 10; // For smaller fonts like size 25
+      } else if (fontSize <= 38) {
+        return 20; // For medium fonts like size 38
+      } else {
+        return (fontSize * 0.5).round(); // For larger fonts, scale proportionally
+      }
+    }
+    
+    // Calculate barcode position
+    int scancodeLength = scancode.length;
+    // Estimate barcode width for Code 128
+    // Code 128: Each character takes ~11 modules + start/stop characters
+    int totalBarcodeCharacters = scancodeLength + 3; // +3 for start, check, and stop characters
+    int moduleWidth = 2; // from ^BY2
+    int estimatedBarcodeWidth = totalBarcodeCharacters * 11 * moduleWidth;
+    
+    // Calculate text widths using font size and DPI
+    int productNameCharWidth = getCharWidthInDots(38, dpi);
+    int colorSizeCharWidth = getCharWidthInDots(25, dpi);
+    int priceCharWidth = getCharWidthInDots(38, dpi);
+    
+    int estimatedProductNameWidth = productName.length * productNameCharWidth;
+    int estimatedColorSizeWidth = colorSize.length * colorSizeCharWidth;
+    int estimatedPriceWidth = price.length * priceCharWidth;
+
+    print('[Flutter] Font calculations - DPI: $dpi, Font 38: ${productNameCharWidth}dots/char, Font 25: ${colorSizeCharWidth}dots/char');
+    print('[Flutter] Text widths - ProductName: ${estimatedProductNameWidth}dots, ColorSize: ${estimatedColorSizeWidth}dots, Price: ${estimatedPriceWidth}dots');
+
+    // Calculate centered X position for barcode
+    int barcodeX = (paperWidthDots - estimatedBarcodeWidth) ~/ 2;
+    int productNameX = (paperWidthDots - estimatedProductNameWidth) ~/ 2;
+    int colorSizeX = (paperWidthDots - estimatedColorSizeWidth) ~/ 2;
+    int priceX = (paperWidthDots - estimatedPriceWidth) ~/ 2;
+
+    // Ensure barcode doesn't go off the left edge
+    barcodeX = barcodeX.clamp(0, paperWidthDots - estimatedBarcodeWidth);
+    
+    print('[Flutter] Label positions - ProductName: ($productNameX,14), Price: ($priceX,52), ColorSize: ($colorSizeX,90), Barcode: ($barcodeX,124)');
+
+    String labelZpl = '''
+      ^XA
+      ^CF0,27
+      ^FO104,150
+      ^FD^FS
+      ^CF0,25
+      ^FO$colorSizeX,90^FD$colorSize^FS
+      ^BY2,3,50
+      ^FO$barcodeX,124^BCN^FD$scancode^FS
+      ^CF0,38
+      ^FO$priceX,52^FD$price^FS
+      ^CF0,38
+      ^FO$productNameX,14^FD$productName^FS
+      ^XZ''';
+    return labelZpl;
+  }
+
+  Future<String> _generateZebraReceiptZPL(int width, int height, int dpi, ReceiptData receiptData) async {
+    // Format date and time (handle nullable DateTime)
+    final now = receiptData.transactionDate ?? DateTime.now();
+    final formattedDate = "${_getWeekday(now.weekday)} ${_getMonth(now.month)} ${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}";
+    
+    // Helper function to get character width in dots based on font size and DPI
+    int getCharWidthInDots(int fontSize, int dpi) {
+      if (fontSize <= 25) {
+        return 10; // For smaller fonts like size 25
+      } else if (fontSize <= 30) {
+        return 12; // For medium fonts like size 30
+      } else if (fontSize <= 38) {
+        return 20; // For medium fonts like size 38  
+      } else if (fontSize <= 47) {
+        return 24; // For larger fonts like size 47
+      } else {
+        return (fontSize * 0.5).round(); // For even larger fonts, scale proportionally
+      }
+    }
+    
+    // Calculate centered positions for store name and address
+    int storeNameCharWidth = getCharWidthInDots(47, dpi);
+    int storeAddressCharWidth = getCharWidthInDots(27, dpi);
+    
+    int estimatedStoreNameWidth = receiptData.storeName.length * storeNameCharWidth;
+    int estimatedStoreAddressWidth = receiptData.storeAddress.length * storeAddressCharWidth;
+    
+    int storeNameX = (width - estimatedStoreNameWidth) ~/ 2;
+    int storeAddressX = (width - estimatedStoreAddressWidth) ~/ 2;
+    
+    // Ensure positions don't go negative
+    storeNameX = storeNameX.clamp(0, width - estimatedStoreNameWidth);
+    storeAddressX = storeAddressX.clamp(0, width - estimatedStoreAddressWidth);
+    
+    print('[Flutter] Receipt positioning - Store Name: ($storeNameX,64), Store Address: ($storeAddressX,388)');
+    
+    // Build ZPL string dynamically using actual form data with calculated positions
+    String receiptZpl = '''
+^XA
+^CF0,47
+^FO$storeNameX,64
+^FD${receiptData.storeName}^FS
+^CF0,27
+^FO$storeAddressX,388
+^FD${receiptData.storeAddress}^FS''';
+
+    // Add phone if provided (centered)
+    if (receiptData.storePhone != null) {
+      int storePhoneCharWidth = getCharWidthInDots(25, dpi);
+      int estimatedStorePhoneWidth = receiptData.storePhone!.length * storePhoneCharWidth;
+      int storePhoneX = (width - estimatedStorePhoneWidth) ~/ 2;
+      storePhoneX = storePhoneX.clamp(0, width - estimatedStorePhoneWidth);
+      
+      receiptZpl += '''
+^CF0,25
+^FO$storePhoneX,420
+^FD${receiptData.storePhone}^FS''';
+    }
+
+    receiptZpl += '''
+^CF0,30
+^FO20,478
+^FD$formattedDate^FS''';
+
+    // Add cashier if provided
+    if (receiptData.cashierName != null) {
+      receiptZpl += '''
+^CF0,30
+^FO470,478
+^FDCashier: ${receiptData.cashierName}^FS''';
+    }
+
+    // Add lane if provided
+    if (receiptData.laneNumber != null) {
+      receiptZpl += '''
+^CF0,30
+^FO470,526
+^FDLane: ${receiptData.laneNumber}^FS''';
+    }
+
+    // Add receipt number if provided
+    if (receiptData.receiptNumber != null) {
+      receiptZpl += '''
+^CF0,30
+^FO20,530
+^FDReceipt No: ${receiptData.receiptNumber}^FS''';
+    }
+
+    // Add logo (keeping the existing logo)
+    receiptZpl += '''
+^FO200,132
+^GFA,7200,7200,30,!::::::::::::::::::::::::::::::::::::::::::::::gVF03!gTFCJ0!gTFL0!XFCH0RF8L03!:WFEJ07OFEM01!WFK01OFCN0!VFCL03NFO01!VF8L01MFEP0!UFCN0MFCP07!:UF8N07LF8I01HFJ07!UFO03LFI01IFCI03!UFI03HFJ0LFI07IFK0!TFEI0IFJ07JFCI0IFEK0!TFCH03HFEJ07JFCH03IFEK07!:TFCH0IFEJ03JF8H07IFEH08H07!TFH01IFE02H03JF8H0JFE03CH07!TFH03JF03H01JFI0KF03EH03!TFH03JFCFC01JFH01MFEH03!SFEH07LFC01JFH01MFEH03!:SFEH07LFCH0JFH01NFH01!SFEH07LFEH0IFEH03NFH01!SFEH0MFEH0IFEH03NFH01!:::SFEH0MFEH0HF9EH03NFH01!SFEH0MFEH0FC0EH03NFH01!SFEH0MFEH0FH0EH03NFH01!SFEH07LFEH0EH0EH03NFH01!SFEH07LFC01CH03H01NFH01!:SFEH07LFCK03H01MFEH03!TFH03LFL01I0MFEH03!TFH03LFL01I0MFCH03!TFH01KFEL018H07LFCH07!TFCH0KFCM08H03LF8H07!:TFCH03JF8M0CH03LFI07!TFEI0IFCN04I0LF8H0!UFH03JFN07H03LFE03!UF81KFEM0380NFC3!UF87LFM0381OF7!:gIFN0C3!gIFN07!gHFEN03!gHFCN01!gHFCO0!:gHFCO03!gHF8O01!gHF8P07!gHF8P03!gHF8Q07!:gHF8R0!gHFES0!gHFES03!gIFT07!gIFCS0!:gIFER03!gJFR07!gJFQ01!gJF8P03!gJFCO01!:gKF8N07!gKFCM03!gKFEM0!gLFCK03!gMFJ07!:gNFH0!!:::::::::::::gFH0!XFCK07!:WFCM01!VFEP0!VFR0!UF8R01!TFET01!:TFCU07!SFEW0!SFCW01!SFY03!RFCg0!:RF8g03!RFgH07!QFEgH01!QFCgI03!QFgJ01!:PFEgK07XFC!PFCgL0XF0!PFCgL07VF80!MFgP01UFCH0!LFgR0UFCH0!:KFC03FCgN01UFC0!KF03HFCgO0UFC0!JFE0IF8gO07TFC0!JF81IFgR0SFC0!JF83IFgS03QFC0!:JF0IFEgT01PFC0!IFC1IFCgU03OFC0!IF81IFCgV07NFC0!IF83IFgX0NFC0!IF03IFgX03MFC0!:IF07HFEgX01MFC0!IF07HFEgY03LFC0!HFE07HFEh0LFC0!HFE07HFEh07KFC0!HFE07HFEhG07JFC0!:HFE07HFEhH03IFC0!HFC0IFEhH01IFC0!HFC0JFhI0IFC0!HFC07IFhI07HFC0!HFC07IFChH07HFC0!:HFC07IFEhH07HFC0!HFC07JFU078gK03HFC0!HFC07JF8T07gL03HFC0!HFE07KFQ07E04gM0HFC0!HFE07KFCN01HFE04gM07FC0!:HFE03LFEM0IFEgO03FC0!HFE03NFE07FE0IFEgO01FC0!IF03NFE0HFE0IFEgO01FC0!IF01NFE0HFE0IFEgP0FC0!IF80NFC1HFE0IFEgP03C0!:IF80NFC1HFE0IFEgP01C0!IFC03MF83HFE0IFEgQ0C0!IFC01MF8IFE0IFEgQ0C0!JFH0MF0IFE07HFEgQ040!JF807KFC1IFE07HFEgQ040!:JFC03KF83IFE07HFCgS0!JFEH0KF07JF03HF8gS0!KFH03IFC3KFH0HFgT03!JFCI03FC07KF8gX0!JF8L01LFCI0CgT03HF:JF83CI01NF8078gO03E3!JF1HF8I0QF8gK07!JF3HFEJ03OF8gH07!JF3IFCK0NF8Y07!IFC7JFM0KF8W03!:JF7JFCgL03!PFgJ07!PFCgK0!QFgM0!QFEgN07RFC!:SFK07HF8gG0OFC0!gNFCgJ03!gRFg07!gTF8V0!gVFCQ03!:!:::::::^FS
+^FO44,574^GB554,1,2,B,0^FS''';
+
+    // Add line items dynamically
+    int yPosition = 612;
+    for (var item in receiptData.items) {
+      receiptZpl += '''
+^CF0,30
+^FO56,$yPosition
+^FD${item.quantity} x ${item.itemName}^FS
+^CF0,30
+^FO470,$yPosition
+^FD\$${item.unitPrice.toStringAsFixed(2)}^FS''';
+      yPosition += 56; // Move down for next item
+    }
+
+    // Calculate positions for bottom elements after line items
+    int bottomLineY = yPosition + 20; // Add some spacing after last item
+    int totalY = bottomLineY + 22; // Add spacing after bottom line
+    int thankYouY = totalY + 54; // Add spacing after total
+    
+    // Calculate minimum required height for the receipt
+    int minRequiredHeight = thankYouY + 60; // Add bottom margin
+    
+    // Use the larger of the detected height or minimum required height
+    int actualReceiptHeight = height > minRequiredHeight ? height : minRequiredHeight;
+    
+    print('[Flutter] Receipt layout - Last item Y: $yPosition, Total Y: $totalY, Thank you Y: $thankYouY');
+    print('[Flutter] Receipt height - Detected: $height, Required: $minRequiredHeight, Using: $actualReceiptHeight');
+
+    // Add bottom line at dynamic position
+    receiptZpl += '''
+^FO44,$bottomLineY^GB554,1,2,B,0^FS''';
+
+    // Add total using the correct getter (centered) at dynamic position
+    final total = receiptData.calculatedTotal;
+    int totalCharWidth = getCharWidthInDots(35, dpi);
+    String totalText = "Total: \$${total.toStringAsFixed(2)}";
+    int estimatedTotalWidth = totalText.length * totalCharWidth;
+    int totalX = (width - estimatedTotalWidth) ~/ 2;
+    totalX = totalX.clamp(0, width - estimatedTotalWidth);
+    
+    receiptZpl += '''
+^CF0,35
+^FO$totalX,$totalY
+^FD$totalText^FS''';
+
+    // Add thank you message (centered) at dynamic position
+    String thankYouMsg = receiptData.thankYouMessage ?? 'Thank you for shopping with us!';
+    int thankYouCharWidth = getCharWidthInDots(30, dpi);
+    int estimatedThankYouWidth = thankYouMsg.length * thankYouCharWidth;
+    int thankYouX = (width - estimatedThankYouWidth) ~/ 2;
+    thankYouX = thankYouX.clamp(0, width - estimatedThankYouWidth);
+    
+    receiptZpl += '''
+^CF0,30
+^FO$thankYouX,$thankYouY
+^FD$thankYouMsg^FS''';
+
+    // Set the label length to accommodate the full receipt if needed
+    if (actualReceiptHeight > height) {
+      receiptZpl = '''
+^XA
+^LL$actualReceiptHeight
+''' + receiptZpl.substring(4); // Replace ^XA with ^XA^LL command
+    }
+    
+    receiptZpl += '''
+^XZ''';
+
+    return receiptZpl;
+  }
+
+  String _getWeekday(int weekday) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return weekdays[weekday - 1];
+  }
+
+  String _getMonth(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
+  Widget _buildZebraControls() {
+    return Column(
+      children: [
+        // Label Printing Card
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.label, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Text('Label Printing', style: Theme.of(context).textTheme.headlineSmall),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                // Label form fields
+                TextField(
+                  controller: _zebraLabelProductNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Product Name',
+                    hintText: 'Enter product name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _zebraLabelColorSizeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Color/Size',
+                          hintText: 'Red/Large',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _zebraLabelPriceController,
+                        decoration: const InputDecoration(
+                          labelText: 'Price',
+                          hintText: '\$29.99',
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _zebraLabelScancodeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Barcode/SKU',
+                          hintText: '123456789',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 100,
+                      child: TextField(
+                        controller: TextEditingController(text: _zebraLabelQuantity.toString()),
+                        decoration: const InputDecoration(
+                          labelText: 'Quantity',
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                        onChanged: (value) {
+                          _zebraLabelQuantity = int.tryParse(value) ?? 1;
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                Center(
+                  child: ElevatedButton.icon(
+                    onPressed: _isConnected ? () => _printLabel() : null,
+                    icon: const Icon(Icons.print),
+                    label: const Text('Print Label'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Receipt Printing Card
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.receipt, color: Colors.green),
+                    const SizedBox(width: 8),
+                    Text('Receipt Printing', style: Theme.of(context).textTheme.headlineSmall),
+                    const Spacer(),
+                    IconButton(
+                      icon: Icon(_zebraShowReceiptForm ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down),
+                      onPressed: () {
+                        setState(() {
+                          _zebraShowReceiptForm = !_zebraShowReceiptForm;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                
+                if (_zebraShowReceiptForm) ...[
+                  const SizedBox(height: 16),
+                  
+                  // Store Information
+                  Text('Store Information', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _zebraStoreNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Store Name',
+                            hintText: 'My Store',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _zebraStoreAddressController,
+                          decoration: const InputDecoration(
+                            labelText: 'Store Address',
+                            hintText: '123 Main St',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  TextField(
+                    controller: _zebraStorePhoneController,
+                    decoration: const InputDecoration(
+                      labelText: 'Store Phone (Optional)',
+                      hintText: '(555) 123-4567',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Transaction Details
+                  Text('Transaction Details', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _zebraCashierNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Cashier Name (Optional)',
+                            hintText: 'John Doe',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _zebraLaneNumberController,
+                          decoration: const InputDecoration(
+                            labelText: 'Lane Number (Optional)',
+                            hintText: '1',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  TextField(
+                    controller: _zebraReceiptNumberController,
+                    decoration: const InputDecoration(
+                      labelText: 'Receipt Number (Optional)',
+                      hintText: 'R001',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Line Items
+                  Text('Line Items', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  
+                  ...List.generate(_zebraLineItemControllers.length, (index) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 60,
+                            child: TextField(
+                              controller: _zebraLineItemControllers[index]['quantity'],
+                              decoration: const InputDecoration(
+                                labelText: 'Qty',
+                                border: OutlineInputBorder(),
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _zebraLineItemControllers[index]['item'],
+                              decoration: const InputDecoration(
+                                labelText: 'Item Name',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: _zebraLineItemControllers[index]['price'],
+                              decoration: const InputDecoration(
+                                labelText: 'Price',
+                                border: OutlineInputBorder(),
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            ),
+                          ),
+                          if (_zebraLineItemControllers.length > 1) ...[
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.remove_circle, color: Colors.red),
+                              onPressed: () => _removeZebraLineItem(index),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }),
+                  
+                  // Add line item button
+                  Center(
+                    child: IconButton(
+                      icon: const Icon(Icons.add_circle, color: Colors.green, size: 32),
+                      onPressed: _addZebraLineItem,
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Thank you message
+                  TextField(
+                    controller: _zebraThankYouMessageController,
+                    decoration: const InputDecoration(
+                      labelText: 'Thank You Message (Optional)',
+                      hintText: 'Thank you for shopping with us!',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Print receipt button
+                  Center(
+                    child: ElevatedButton.icon(
+                      onPressed: _isConnected ? () => _printReceipt() : null,
+                      icon: const Icon(Icons.print),
+                      label: const Text('Print Receipt'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _getZebraStatus() async {
+    if (!_isConnected || _selectedZebraPrinter == null) {
+      setState(() => _printerStatus = 'Not connected');
+      return;
+    }
+
+    try {
+      final status = await ZebraPrinter.getStatus();
+      setState(() => _printerStatus = status.isOnline ? 'Online' : 'Offline');
+    } catch (e) {
+      setState(() => _printerStatus = 'Error: $e');
+      print('[Flutter] Zebra status error: $e');
+    }
+  }
+
+  Future<ConnectedPrinter?> _getZebraDimensions() async {
+    if (!_isConnected || _selectedZebraPrinter == null) return null;
+
+    try {
+      final dimensions = await ZebraPrinter.getPrinterDimensions();
+      return ConnectedPrinter(
+        discoveredPrinter: _selectedZebraPrinter!,
+        printWidthInDots: dimensions['printWidthInDots'] ?? 0,
+        labelLengthInDots: dimensions['labelLengthInDots'] ?? 0,
+        dpi: dimensions['dpi'] ?? 203,
+        connectedAt: DateTime.now(),
+      );
+    } catch (e) {
+      print('[Flutter] Zebra dimensions error: $e');
+      return null;
+    }
   }
 
   // Build EpsonPrintCommand list for POS style receipt with standardized commands
@@ -1307,7 +2432,7 @@ class _MyHomePageState extends State<MyHomePage> {
             await EpsonPrinter.disconnect();
             break;
           case PrinterBrand.star:
-            await StarPrinter.disconnect();
+            await star.StarPrinter.disconnect();
             break;
           case PrinterBrand.zebra:
             // TODO: Wire Zebra disconnect when available
@@ -1345,7 +2470,7 @@ class _MyHomePageState extends State<MyHomePage> {
           });
           break;
         case PrinterBrand.star:
-          final status = await StarPrinter.getStatus();
+          final status = await star.StarPrinter.getStatus();
           setState(() {
             _printerStatus = 'Online: ${status.isOnline}, Status: ${status.status}';
           });
@@ -1385,7 +2510,7 @@ class _MyHomePageState extends State<MyHomePage> {
           break;
         case PrinterBrand.star:
           print('DEBUG: Opening cash drawer...');
-          await StarPrinter.openCashDrawer();
+          await star.StarPrinter.openCashDrawer();
           print('DEBUG: Cash drawer command sent successfully');
           break;
         case PrinterBrand.zebra:
@@ -1493,12 +2618,14 @@ class _MyHomePageState extends State<MyHomePage> {
             _buildConnectionCard(),
             const SizedBox(height: 16),
             
-            // Receipt Layout Card - Commented out as we now use POS style for both brands
-            // _buildReceiptLayoutCard(),
-            // const SizedBox(height: 16),
-            
-            // POS Style Receipt Card
-            _buildPosReceiptCard(),
+            // Brand-specific controls
+            if (_selectedBrand == PrinterBrand.zebra) ...[
+              _buildZebraControls(),
+              const SizedBox(height: 16),
+            ] else ...[
+              // POS Style Receipt Card for non-Zebra brands
+              _buildPosReceiptCard(),
+            ],
           ],
         ),
       ),

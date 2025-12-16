@@ -65,14 +65,12 @@
 		<string>jp.star-m.starpro</string>
 		<string>com.epson.posprinter</string>
 		<string>com.epson.escpos</string>
+		<string>com.zebra.rawport</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<array>
-		<string>com.zebra.rawport</string>
-	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>external-accessory</string>

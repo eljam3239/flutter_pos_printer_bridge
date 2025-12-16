@@ -8,6 +8,8 @@ PODS:
     - Flutter
   - star_printer_ios (1.0.0):
     - Flutter
+  - zebra_printer_ios (0.0.1):
+    - Flutter
 
 DEPENDENCIES:
   - epson_printer_ios (from `.symlinks/plugins/epson_printer_ios/ios`)
@@ -15,6 +17,7 @@ DEPENDENCIES:
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
   - star_printer_ios (from `.symlinks/plugins/star_printer_ios/ios`)
+  - zebra_printer_ios (from `.symlinks/plugins/zebra_printer_ios/ios`)
 
 EXTERNAL SOURCES:
   epson_printer_ios:
@@ -27,6 +30,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
   star_printer_ios:
     :path: ".symlinks/plugins/star_printer_ios/ios"
+  zebra_printer_ios:
+    :path: ".symlinks/plugins/zebra_printer_ios/ios"
 
 SPEC CHECKSUMS:
   epson_printer_ios: 28299f459d8a19ca1f2e1af13807285c317cafd1
@@ -34,6 +39,7 @@ SPEC CHECKSUMS:
   image_picker_ios: c560581cceedb403a6ff17f2f816d7fea1421fc1
   permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
   star_printer_ios: 5da9c838c870f7eb38d9f64d7e5ef0615762099b
+  zebra_printer_ios: 9067fe0176d21f46d615c2d53014e563888983fe
 
 PODFILE CHECKSUM: 78335bf8882685c1d091d00fc414d4997338ebee
 
