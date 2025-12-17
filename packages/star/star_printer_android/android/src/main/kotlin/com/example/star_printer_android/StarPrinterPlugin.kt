@@ -474,6 +474,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   // Use targetDots for text width calculation in label mode (matching iOS logic)
   val cpl = if (useLabelMode) (targetDots / 12.0).toInt() else currentColumnsPerLine()
   println("DEBUG: Text width calculation - useLabelMode=$useLabelMode, cpl=$cpl (targetDots=$targetDots)")
+  println("DEBUG: TSP650 currentPrintableWidthDots = ${currentPrintableWidthDots()}, fullWidthMm=$fullWidthMm")
 
         // 1) Header: print as bold text instead of image for labels
         if (headerTitle.isNotEmpty()) {
@@ -574,33 +575,43 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
             }
             // Centered Tax Invoice
             printerBuilder.styleAlignment(Alignment.Center).actionPrintText("Tax Invoice\n").styleAlignment(Alignment.Left)
-            // Left date/time, right cashier
-            val leftWidthTop = (cpl / 2).coerceAtLeast(8)
-            val rightWidthTop = (cpl - leftWidthTop).coerceAtLeast(8)
-            val leftParam = TextParameter().setWidth(leftWidthTop)
-            val rightParam = TextParameter().setWidth(rightWidthTop, TextWidthParameter().setAlignment(TextAlignment.Right))
-            val left1 = listOf(dateText, timeText).filter { it.isNotEmpty() }.joinToString(" ")
-            val right1 = if (cashier.isNotEmpty()) "Cashier: $cashier" else ""
-            printerBuilder.actionPrintText(left1, leftParam)
-            printerBuilder.actionPrintText("$right1\n", rightParam)
-            // Left receipt no, right lane
-            val left2 = if (receiptNum.isNotEmpty()) "Receipt No: $receiptNum" else ""
-            val right2 = if (lane.isNotEmpty()) "Lane: $lane" else ""
-            printerBuilder.actionPrintText(left2, leftParam)
-            printerBuilder.actionPrintText("$right2\n", rightParam)
-            // Gap then first ruled line
-            printerBuilder.actionFeedLine(1)
-            println("DEBUG: Printing ruled line with fullWidthMm=$fullWidthMm")
-            printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
-
-            // Inject item lines (text path only here). Each item: "Q x Name" left, price right.
-            val itemList = items?.mapNotNull { it as? Map<*, *> } ?: emptyList()
-            if (itemList.isNotEmpty()) {
-              // Allocate ~62.5% to left, remaining to right based on CPL
-              val leftItemsWidth = ((cpl * 5) / 8).coerceAtLeast(8)
-              val rightItemsWidth = (cpl - leftItemsWidth).coerceAtLeast(6)
-              val leftParam = TextParameter().setWidth(leftItemsWidth) // more left width for description
-              val rightParam = TextParameter().setWidth(rightItemsWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+            
+            // For TSP650II - use manual space padding since .setWidth() isn't supported
+            val modelStr = printer?.information?.model?.toString()?.lowercase() ?: ""
+            if (modelStr.contains("tsp650")) {
+              println("DEBUG: Using manual padding for TSP650II (42 chars per line)")
+              val left1 = listOf(dateText, timeText).filter { it.isNotEmpty() }.joinToString(" ")
+              val right1 = if (cashier.isNotEmpty()) "Cashier: $cashier" else ""
+              if (left1.isNotEmpty() && right1.isNotEmpty()) {
+                val totalLen = left1.length + right1.length
+                val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                val paddedLine = left1 + " ".repeat(spacesNeeded) + right1
+                printerBuilder.actionPrintText("$paddedLine\n")
+              } else if (left1.isNotEmpty()) {
+                printerBuilder.actionPrintText("$left1\n")
+              } else if (right1.isNotEmpty()) {
+                printerBuilder.actionPrintText("${" ".repeat(42 - right1.length)}$right1\n")
+              }
+              
+              val left2 = if (receiptNum.isNotEmpty()) "Receipt No: $receiptNum" else ""
+              val right2 = if (lane.isNotEmpty()) "Lane: $lane" else ""
+              if (left2.isNotEmpty() && right2.isNotEmpty()) {
+                val totalLen = left2.length + right2.length
+                val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                val paddedLine = left2 + " ".repeat(spacesNeeded) + right2
+                printerBuilder.actionPrintText("$paddedLine\n")
+              } else if (left2.isNotEmpty()) {
+                printerBuilder.actionPrintText("$left2\n")
+              } else if (right2.isNotEmpty()) {
+                printerBuilder.actionPrintText("${" ".repeat(42 - right2.length)}$right2\n")
+              }
+              
+              // Gap then first ruled line
+              printerBuilder.actionFeedLine(1)
+              printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
+              
+              // Item lines with manual padding
+              val itemList = items?.mapNotNull { it as? Map<*, *> } ?: emptyList()
               for (item in itemList) {
                 val qty = (item["quantity"] as? String)?.trim().orEmpty()
                 val name = (item["name"] as? String)?.trim().orEmpty()
@@ -610,18 +621,61 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
                 val rightText = if (price.isNotEmpty()) "$$price" else "$0.00"
                 repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
-                  printerBuilder.actionPrintText(leftText, leftParam)
-                  printerBuilder.actionPrintText("$rightText\n", rightParam)
+                  val totalLen = leftText.length + rightText.length
+                  val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                  val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
+                  printerBuilder.actionPrintText("$paddedLine\n")
                 }
               }
-            }
-
-            // Second ruled line after items
-            printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
-            printerBuilder.actionFeedLine(1)
-            // Footer centered
-            if (footer.isNotEmpty()) {
-              printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$footer\n").styleAlignment(Alignment.Left)
+              
+              // Second ruled line and footer
+              printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
+              printerBuilder.actionFeedLine(1)
+              if (footer.isNotEmpty()) {
+                printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$footer\n").styleAlignment(Alignment.Left)
+              }
+            } else {
+              // Use normal TextParameter approach for other printers (that support .setWidth())
+              val leftWidthTop = (cpl / 2).coerceAtLeast(8)
+              val rightWidthTop = (cpl - leftWidthTop).coerceAtLeast(8)
+              val leftParam = TextParameter().setWidth(leftWidthTop)
+              val rightParam = TextParameter().setWidth(rightWidthTop, TextWidthParameter().setAlignment(TextAlignment.Right))
+              val left1 = listOf(dateText, timeText).filter { it.isNotEmpty() }.joinToString(" ")
+              val right1 = if (cashier.isNotEmpty()) "Cashier: $cashier" else ""
+              printerBuilder.actionPrintText(left1, leftParam)
+              printerBuilder.actionPrintText("$right1\n", rightParam)
+              val left2 = if (receiptNum.isNotEmpty()) "Receipt No: $receiptNum" else ""
+              val right2 = if (lane.isNotEmpty()) "Lane: $lane" else ""
+              printerBuilder.actionPrintText(left2, leftParam)
+              printerBuilder.actionPrintText("$right2\n", rightParam)
+              printerBuilder.actionFeedLine(1)
+              printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
+              
+              val itemList = items?.mapNotNull { it as? Map<*, *> } ?: emptyList()
+              if (itemList.isNotEmpty()) {
+                val leftItemsWidth = ((cpl * 5) / 8).coerceAtLeast(8)
+                val rightItemsWidth = (cpl - leftItemsWidth).coerceAtLeast(6)
+                val leftParam2 = TextParameter().setWidth(leftItemsWidth)
+                val rightParam2 = TextParameter().setWidth(rightItemsWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+                for (item in itemList) {
+                  val qty = (item["quantity"] as? String)?.trim().orEmpty()
+                  val name = (item["name"] as? String)?.trim().orEmpty()
+                  val price = (item["price"] as? String)?.trim().orEmpty()
+                  val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
+                  val repeatN = repeatStr.toIntOrNull() ?: 1
+                  val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
+                  val rightText = if (price.isNotEmpty()) "$$price" else "$0.00"
+                  repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+                    printerBuilder.actionPrintText(leftText, leftParam2)
+                    printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                  }
+                }
+              }
+              printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
+              printerBuilder.actionFeedLine(1)
+              if (footer.isNotEmpty()) {
+                printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$footer\n").styleAlignment(Alignment.Left)
+              }
             }
           }
         }
@@ -1070,7 +1124,16 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   private fun currentColumnsPerLine(): Int {
     val dots = currentPrintableWidthDots()
-    return if (dots >= 576) 48 else 32
+    val modelStr = printer?.information?.model?.toString()?.lowercase() ?: ""
+    
+    return when {
+      // TSP650II needs fewer characters per line than other 80mm printers
+      modelStr.contains("tsp650") -> 42
+      // Other 80mm printers
+      dots >= 576 -> 48
+      // 58mm printers  
+      else -> 32
+    }
   }
 
   // Render multiline text into a Bitmap suitable for printing

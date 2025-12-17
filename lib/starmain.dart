@@ -6,7 +6,6 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'dart:convert' show base64Encode;
 import 'package:image_picker/image_picker.dart';
 
-
 void main() {
   runApp(const MyApp());
 }
@@ -121,10 +120,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _receiptNumController = TextEditingController(text: _receiptNum);
     _laneController = TextEditingController(text: _lane);
     _footerController = TextEditingController(text: _footer);
-  _itemQuantityController = TextEditingController(text: _itemQuantity);
-  _itemNameController = TextEditingController(text: _itemName);
-  _itemPriceController = TextEditingController(text: _itemPrice);
-  _itemRepeatController = TextEditingController(text: _itemRepeat);
+    _itemQuantityController = TextEditingController(text: _itemQuantity);
+    _itemNameController = TextEditingController(text: _itemName);
+    _itemPriceController = TextEditingController(text: _itemPrice);
+    _itemRepeatController = TextEditingController(text: _itemRepeat);
     _checkAndRequestPermissions();
     _loadFrogAsset();
   }
@@ -139,10 +138,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _receiptNumController.dispose();
     _laneController.dispose();
     _footerController.dispose();
-  _itemQuantityController.dispose();
-  _itemNameController.dispose();
-  _itemPriceController.dispose();
-  _itemRepeatController.dispose();
+    _itemQuantityController.dispose();
+    _itemNameController.dispose();
+    _itemPriceController.dispose();
+    _itemRepeatController.dispose();
     super.dispose();
   }
 
@@ -266,8 +265,6 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _discoverPrinters() async {
     try {
       print('DEBUG: Starting printer discovery...');
-      print('DEBUG: Looking for printers on network. TSP100 should be at 10.20.30.125');
-      
       // Check permissions first - only on Android
       if (Platform.isAndroid) {
         final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
@@ -594,11 +591,14 @@ class _MyHomePageState extends State<MyHomePage> {
                 'footer': _footer,
                 'printableAreaMm': printableAreaMm,  // Add printable area for receipts too
               },
-          'items': List.generate(int.tryParse(_itemRepeat) ?? 1, (index) => {
-            'quantity': _itemQuantity,
-            'name': _itemName,
-            'price': _itemPrice,
-          }),
+          'items': [
+            {
+              'quantity': _itemQuantity,
+              'name': _itemName,
+              'price': _itemPrice,
+              'repeat': _itemRepeat,
+            }
+          ],
           'image': _logoBase64 == null
               ? null
               : {
