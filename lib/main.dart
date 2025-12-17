@@ -82,6 +82,7 @@ class _MyHomePageState extends State<MyHomePage> {
   DiscoveredPrinter? _selectedZebraPrinter;
   ConnectedPrinter? _connectedZebraPrinter;
   int _zebraLabelQuantity = 1;
+  final TextEditingController _zebraLabelQuantityController = TextEditingController();
   
   // Zebra label content controllers
   final TextEditingController _zebraLabelProductNameController = TextEditingController();
@@ -174,6 +175,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _zebraCashierNameController.text = 'John Doe';
     _zebraLaneNumberController.text = '1';
     _zebraThankYouMessageController.text = 'Thank you for shopping with us!';
+    _zebraLabelQuantityController.text = _zebraLabelQuantity.toString();
     _addZebraLineItem(); // Add initial line item
   }
 
@@ -201,6 +203,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _zebraCashierNameController.dispose();
     _zebraLaneNumberController.dispose();
     _zebraThankYouMessageController.dispose();
+    _zebraLabelQuantityController.dispose();
     _zebraMacAddressController.dispose();
     
     // Dispose Zebra line item controllers
@@ -1591,19 +1594,28 @@ class _MyHomePageState extends State<MyHomePage> {
       // Generate ZPL with actual printer dimensions, DPI, and label data
       String labelZpl = await _generateZebraLabelZPL(width, height, dpi, labelData);
       
+      // Ensure we have a valid quantity (minimum 1)
+      final printQuantity = _zebraLabelQuantity > 0 ? _zebraLabelQuantity : 1;
+      if (printQuantity != _zebraLabelQuantity) {
+        setState(() {
+          _zebraLabelQuantity = printQuantity;
+          _zebraLabelQuantityController.text = printQuantity.toString();
+        });
+      }
+      
       // Print labels based on quantity
-      for (int i = 0; i < _zebraLabelQuantity; i++) {
+      for (int i = 0; i < printQuantity; i++) {
         await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
         
         // Small delay between labels to prevent overwhelming the printer
-        if (i < _zebraLabelQuantity - 1) {
+        if (i < printQuantity - 1) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
       }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$_zebraLabelQuantity Zebra label(s) sent successfully')),
+        SnackBar(content: Text('$printQuantity Zebra label(s) sent successfully')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -1981,14 +1993,34 @@ class _MyHomePageState extends State<MyHomePage> {
                     SizedBox(
                       width: 100,
                       child: TextField(
-                        controller: TextEditingController(text: _zebraLabelQuantity.toString()),
+                        controller: _zebraLabelQuantityController,
                         decoration: const InputDecoration(
                           labelText: 'Quantity',
                           border: OutlineInputBorder(),
                         ),
                         keyboardType: TextInputType.number,
                         onChanged: (value) {
-                          _zebraLabelQuantity = int.tryParse(value) ?? 1;
+                          // Allow empty field temporarily, only validate on print or focus loss
+                          final parsed = int.tryParse(value);
+                          if (parsed != null && parsed > 0) {
+                            setState(() {
+                              _zebraLabelQuantity = parsed;
+                            });
+                          } else if (value.isEmpty) {
+                            // Allow empty field temporarily
+                            setState(() {
+                              _zebraLabelQuantity = 0; // Use 0 to indicate empty, will default to 1 when printing
+                            });
+                          }
+                        },
+                        onSubmitted: (value) {
+                          // When user finishes editing, ensure we have a valid value
+                          final parsed = int.tryParse(value);
+                          final finalValue = (parsed != null && parsed > 0) ? parsed : 1;
+                          setState(() {
+                            _zebraLabelQuantity = finalValue;
+                            _zebraLabelQuantityController.text = finalValue.toString();
+                          });
                         },
                       ),
                     ),
