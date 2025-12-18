@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
+import 'printer_bridge.dart';
 void main() {
   runApp(const MyApp());
 }
@@ -2946,6 +2947,35 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  // DEBUG: Test our PrinterBridge abstraction
+  Future<void> _testPrinterBridge() async {
+    if (_selectedBrand == null) {
+      _showBrandSelectionSnackBar();
+      return;
+    }
+
+    try {
+      print('DEBUG: Testing PrinterBridge.discover(${_selectedBrand!.name})...');
+      final results = await PrinterBridge.discover(_selectedBrand!.name);
+      
+      print('DEBUG: PrinterBridge returned ${results.length} printers:');
+      for (int i = 0; i < results.length; i++) {
+        print('DEBUG: [$i] ${results[i]}');
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PrinterBridge found ${results.length} printers (check console for details)')),
+      );
+    } catch (e) {
+      print('DEBUG: PrinterBridge error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PrinterBridge error: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -3095,6 +3125,12 @@ class _MyHomePageState extends State<MyHomePage> {
                           )) ? _discoverPrinters : null,
                   icon: const Icon(Icons.search),
                   label: const Text('Discover'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: _selectedBrand != null ? _testPrinterBridge : null,
+                  icon: const Icon(Icons.bug_report),
+                  label: const Text('Test Bridge'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
                 ),
                 ElevatedButton.icon(
                   onPressed: _selectedBrand != null && _discoveredPrinters.isNotEmpty ? _connectToPrinter : null,

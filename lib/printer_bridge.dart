@@ -1,4 +1,5 @@
 import 'package:epson_printer/epson_printer.dart';
+import 'dart:io';
 
 class PrinterBridge {
   /// Discover printers for a specific brand
@@ -17,27 +18,92 @@ class PrinterBridge {
   }
 
   static Future<List<Map<String, String>>> _discoverEpsonPrinters() async {
-    // Get raw discovery results
-    final lanPrinters = await EpsonPrinter.discoverPrinters();
-    final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
-    final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
+    // Check if native discovery is idle (prevent concurrent discoveries)
+    try {
+      final native = await EpsonPrinter.getDiscoveryState();
+      final nativeDiscoveryState = (native['state'] as String?) ?? 'idle';
+      if (nativeDiscoveryState != 'idle') {
+        throw Exception('Epson discovery already in progress');
+      }
+    } catch (_) {}
+
+    final List<String> allPrinters = [];
     
-    final allPrinters = [...lanPrinters, ...btPrinters, ...usbPrinters];
-    
+    // Stage 1: LAN discovery
+    try {
+      final lanPrinters = await EpsonPrinter.discoverPrinters();
+      allPrinters.addAll(lanPrinters);
+    } catch (e) {
+      print('Epson LAN discovery error: $e');
+    }
+
+    // Small delay between discoveries
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Stage 2: Bluetooth discovery 
+    // Note: iOS has complexity around USB disabling BT radio - for now always try BT
+    // TODO: Consider adding options parameter if POS app needs to handle this edge case
+    try {
+      final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
+      allPrinters.addAll(btPrinters);
+    } catch (e) {
+      print('Epson Bluetooth discovery error: $e');
+    }
+
+    // Small delay before USB
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Stage 3: USB discovery
+    try {
+      final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
+      allPrinters.addAll(usbPrinters);
+    } catch (e) {
+      print('Epson USB discovery error: $e');
+    }
+
     // Convert to hybrid format
     return allPrinters.map((raw) => _parseEpsonPrinter(raw)).toList();
   }
 
   static Map<String, String> _parseEpsonPrinter(String raw) {
-    // Parse Epson format: "TCP:192.168.1.100:TM-T88VI"
-    final parts = raw.split(':');
+    // Parse Epson format: "TCP:A4:D7:3C:AA:CA:01:TM-m30III"
+    // Format is: INTERFACE:MAC_ADDRESS:MODEL
+    
+    final firstColon = raw.indexOf(':');
+    if (firstColon == -1) {
+      return {
+        'raw': raw,
+        'brand': 'epson',
+        'interface': '',
+        'address': raw,
+        'model': '',
+      };
+    }
+    
+    final interface = raw.substring(0, firstColon).toLowerCase();
+    final remaining = raw.substring(firstColon + 1);
+    
+    // Find the last colon to separate address from model
+    final lastColon = remaining.lastIndexOf(':');
+    if (lastColon == -1) {
+      return {
+        'raw': raw,
+        'brand': 'epson',
+        'interface': interface,
+        'address': remaining,
+        'model': '',
+      };
+    }
+    
+    final address = remaining.substring(0, lastColon);
+    final model = remaining.substring(lastColon + 1);
     
     return {
       'raw': raw,
       'brand': 'epson',
-      'interface': parts[0].toLowerCase(), // TCP -> tcp
-      'address': parts.length > 1 ? parts[1] : '',
-      'model': parts.length > 2 ? parts[2] : '',
+      'interface': interface,
+      'address': address,
+      'model': model,
     };
   }
 
