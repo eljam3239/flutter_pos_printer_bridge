@@ -382,31 +382,34 @@ class PrinterBridge {
         // Ignore disconnect errors
       }
 
-      // Parse interface type and identifier from connectionString
+      // Use the interface parameter to determine the connection type
       star.StarInterfaceType interfaceType;
-      String identifier;
+      String identifier = connectionString; // Use connectionString as identifier
       
-      // connectionString is the raw discovery string like "LAN:192.168.1.100:TSP654II"
-      if (connectionString.startsWith('LAN:')) {
-        interfaceType = star.StarInterfaceType.lan;
-        final parts = connectionString.substring(4).split(':');
-        identifier = parts[0]; // Take IP/MAC before model info
-      } else if (connectionString.startsWith('BT:')) {
-        interfaceType = star.StarInterfaceType.bluetooth;
-        final parts = connectionString.substring(3).split(':');
-        identifier = parts[0]; // Take MAC before model info
-      } else if (connectionString.startsWith('BLE:')) {
-        interfaceType = star.StarInterfaceType.bluetoothLE;
-        final parts = connectionString.substring(4).split(':');
-        identifier = parts[0]; // Take MAC before model info
-      } else if (connectionString.startsWith('USB:')) {
-        interfaceType = star.StarInterfaceType.usb;
-        final parts = connectionString.substring(4).split(':');
-        identifier = parts[0]; // Take identifier before model info
-      } else {
-        // Default to LAN if no prefix
-        interfaceType = star.StarInterfaceType.lan;
-        identifier = connectionString.split(':')[0];
+      // Map interface string to StarInterfaceType enum
+      switch (interface.toLowerCase()) {
+        case 'lan':
+        case 'tcp':
+        case 'network':
+        case 'wifi':
+          interfaceType = star.StarInterfaceType.lan;
+          break;
+        case 'bt':
+        case 'bluetooth':
+          interfaceType = star.StarInterfaceType.bluetooth;
+          break;
+        case 'ble':
+        case 'bluetoothle':
+        case 'bluetooth_le':
+          interfaceType = star.StarInterfaceType.bluetoothLE;
+          break;
+        case 'usb':
+          interfaceType = star.StarInterfaceType.usb;
+          break;
+        default:
+          // Default to LAN if unknown interface
+          interfaceType = star.StarInterfaceType.lan;
+          break;
       }
       
       print('PrinterBridge: Connecting to Star $interfaceType printer: $identifier');
@@ -512,7 +515,7 @@ class PrinterBridge {
       case 'epson':
         return _printEpsonReceipt(receiptData);
       case 'star':
-        throw UnimplementedError('Star receipt printing not implemented yet');
+        return _printStarReceipt(receiptData);
       case 'zebra':
         return _printZebraReceipt(receiptData);
       default:
@@ -1101,6 +1104,70 @@ class PrinterBridge {
       return true;
     } catch (e) {
       print('Zebra label print failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _printStarReceipt(PrinterReceiptData receiptData) async {
+    try {
+      // Calculate printable area based on paper width (default to 58mm)
+      // This matches the logic in main.dart for Star printers
+      double printableAreaMm = 48.0; // Default for 58mm paper
+      
+      // Paper width mapping: 38mm->34.5mm, 58mm->48mm, 80mm->72mm
+      // For now, we'll use the 58mm default but this could be configurable
+      
+      print('Star receipt - using printableAreaMm: $printableAreaMm');
+      
+      // Build structured layout settings to be interpreted by native layers
+      // This follows the same pattern as main.dart _printStarReceipt()
+      final layoutSettings = {
+        'layout': {
+          'header': {
+            'title': receiptData.storeName,
+            'align': 'center',
+            'fontSize': 32, // Default header font size from main.dart
+            'spacingLines': 1,
+          },
+          'details': {
+            'locationText': receiptData.storeAddress,
+            'date': receiptData.date,
+            'time': receiptData.time,
+            'cashier': receiptData.cashierName ?? '',
+            'receiptNum': receiptData.receiptNumber ?? '',
+            'lane': receiptData.laneNumber ?? '',
+            'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
+            'printableAreaMm': printableAreaMm,
+          },
+          'items': receiptData.items.map((item) => {
+            'quantity': item.quantity.toString(),
+            'name': item.itemName,
+            'price': item.unitPrice.toStringAsFixed(2),
+          }).toList(),
+          'image': receiptData.logoBase64 == null
+              ? null
+              : {
+                  'base64': receiptData.logoBase64,
+                  'mime': 'image/png',
+                  'align': 'center',
+                  'width': 200, // Default image width from main.dart
+                  'spacingLines': 1,
+                },
+        },
+      };
+
+      final printJob = star.PrintJob(
+        content: '',
+        settings: layoutSettings,
+      );
+      
+      print('Sending Star receipt to printer...');
+      await star.StarPrinter.printReceipt(printJob);
+      
+      print('Star receipt completed successfully');
+      return true;
+    } catch (e) {
+      print('Star receipt print failed: $e');
       return false;
     }
   }
