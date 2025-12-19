@@ -897,7 +897,7 @@ class PrinterBridge {
       case 'epson':
         return await _printEpsonLabel(labelData);
       case 'star':
-        throw UnimplementedError('Star label printing not implemented yet');
+        return await _printStarLabel(labelData);
       case 'zebra':
         return await _printZebraLabel(labelData);
       default:
@@ -1168,6 +1168,138 @@ class PrinterBridge {
       return true;
     } catch (e) {
       print('Star receipt print failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _printStarLabel(PrinterLabelData labelData) async {
+    try {
+      print('Star label print - Creating label print job for ${labelData.quantity} label(s)...');
+      
+      // Calculate printable area based on paper width (default to 58mm)
+      // 38mm -> 34.5mm printable, 58mm -> 48mm printable, 80mm -> 72mm printable
+      // For now we'll default to 58mm but this could be made configurable
+      double printableAreaMm = 48.0; // Default to 58mm paper width
+      String layoutType = 'mixed'; // Default to mixed layout
+      
+      // Note: In a full implementation, you might want to make paper width configurable
+      // For now, we'll use the same default as the receipt printing (58mm)
+      
+      print('Star label - using printableAreaMm: $printableAreaMm, layoutType: $layoutType');
+      
+      // Extract label content from PrinterLabelData
+      final productName = labelData.productName.isNotEmpty ? labelData.productName : 'PRODUCT NAME';
+      final category = '';  // Could be extended in PrinterLabelData if needed
+      // Strip any existing dollar signs from price to match main.dart behavior
+      final rawPrice = labelData.price.isNotEmpty ? labelData.price.replaceAll('\$', '') : '0.00';
+      final price = rawPrice.isNotEmpty ? rawPrice : '0.00';
+      final scancode = labelData.barcode.isNotEmpty ? labelData.barcode : '0123456789';
+      
+      // Parse colorSize to extract size and color components
+      // colorSize format is typically "Small Turquoise" - split it properly
+      final colorSizeComponents = labelData.colorSize.isNotEmpty ? labelData.colorSize.split(' ') : ['Default'];
+      final size = colorSizeComponents.isNotEmpty ? colorSizeComponents[0] : '';
+      final color = colorSizeComponents.length > 1 ? colorSizeComponents.skip(1).join(' ') : (colorSizeComponents.isNotEmpty ? colorSizeComponents[0] : 'Default Color');
+      
+      // Label layout settings following the same pattern as main.dart
+      final labelSettings = {
+        'layout': {
+          'header': {
+            'title': productName,
+            'align': 'center',
+            'fontSize': 40,
+            'spacingLines': 0,
+          },
+          'details': {
+            'category': category,
+            'size': size,
+            'color': color,
+            'price': price,
+            'layoutType': layoutType,  // Tell native code which template to use
+            'printableAreaMm': printableAreaMm,  // Pass printable area to native code
+          },
+          'items': [],
+          'image': null,
+          'barcode': {
+            'content': scancode,
+            'symbology': 'code128',  // Using CODE128 as in main.dart
+            'height': 4,  // Very compact barcode height
+            'printHRI': true,  // Print numbers below barcode
+          },
+        },
+      };
+      
+      final labelContent = '';
+
+      final printJob = star.PrintJob(
+        content: labelContent,
+        settings: labelSettings,
+      );
+      
+      bool shownPaperHoldWarning = false;
+      
+      // Print multiple labels with the same logic as main.dart
+      for (int i = 0; i < labelData.quantity; i++) {
+        print('Star label - Sending label ${i + 1} of ${labelData.quantity} to printer...');
+        
+        final printStartTime = DateTime.now();
+        
+        try {
+          // Try to print the label
+          await star.StarPrinter.printReceipt(printJob);
+          
+          final printDuration = DateTime.now().difference(printStartTime);
+          print('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms');
+          
+          // Small delay between prints to prevent buffer overflow
+          if (i < labelData.quantity - 1) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+        } catch (e) {
+          // Check if this is a paper hold error (same logic as main.dart)
+          final errorMessage = e.toString().toLowerCase();
+          if (errorMessage.contains('holding paper') || errorMessage.contains('paper hold')) {
+            if (!shownPaperHoldWarning) {
+              print('Star label - Paper hold detected - waiting for user to remove labels');
+              shownPaperHoldWarning = true;
+            }
+            print('Star label - Paper hold detected - waiting for user to remove label ${i + 1}');
+            
+            // Keep trying to print this label until it succeeds
+            bool labelPrinted = false;
+            while (!labelPrinted) {
+              await Future.delayed(const Duration(milliseconds: 500));
+              try {
+                await star.StarPrinter.printReceipt(printJob);
+                labelPrinted = true;
+                print('Star label - Label ${i + 1} printed after paper removal');
+              } catch (retryError) {
+                // Still holding, keep waiting
+                if (!retryError.toString().toLowerCase().contains('holding paper')) {
+                  // Different error, rethrow
+                  rethrow;
+                }
+              }
+            }
+            
+            final printDuration = DateTime.now().difference(printStartTime);
+            print('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms (including wait time)');
+            
+            // Small delay between prints
+            if (i < labelData.quantity - 1) {
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+          } else {
+            // Different error, rethrow
+            rethrow;
+          }
+        }
+      }
+      
+      print('Star label - All ${labelData.quantity} label(s) printed successfully');
+      return true;
+    } catch (e) {
+      print('Star label print failed: $e');
       return false;
     }
   }
