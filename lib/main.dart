@@ -2963,7 +2963,7 @@ class _MyHomePageState extends State<MyHomePage> {
         print('DEBUG: [$i] ${results[i]}');
       }
 
-      // Test connection to first printer if any found
+      // Test connection and printing to first printer if any found
       if (results.isNotEmpty) {
         final firstPrinter = results[0];
         print('DEBUG: Testing connection to: ${firstPrinter['raw']}');
@@ -2976,10 +2976,48 @@ class _MyHomePageState extends State<MyHomePage> {
         
         print('DEBUG: Connection result: $success');
         
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Bridge: Found ${results.length} printers, connection: $success')),
-        );
+        if (success) {
+          // Test receipt printing
+          print('DEBUG: Testing receipt printing...');
+          final receiptData = PrinterReceiptData(
+            storeName: 'Test Store',
+            storeAddress: '123 Main St, Test City',
+            storePhone: '(555) 123-4567',
+            date: '12/19/2025',
+            time: '3:45 PM',
+            cashierName: 'Test Cashier',
+            receiptNumber: 'R-001',
+            laneNumber: '1',
+            items: [
+              PrinterLineItem(
+                itemName: 'Sample Item 1',
+                quantity: 2,
+                unitPrice: 5.99,
+                totalPrice: 11.98,
+              ),
+              PrinterLineItem(
+                itemName: 'Sample Item 2',
+                quantity: 1,
+                unitPrice: 3.50,
+                totalPrice: 3.50,
+              ),
+            ],
+            thankYouMessage: 'Thank you for your business!',
+          );
+          
+          final printResult = await PrinterBridge.printReceipt(firstPrinter['brand']!, receiptData);
+          print('DEBUG: Print result: $printResult');
+          
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Bridge: Found ${results.length}, connected: $success, printed: $printResult')),
+          );
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Bridge: Found ${results.length} printers, connection: $success')),
+          );
+        }
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

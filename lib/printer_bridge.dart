@@ -1,14 +1,13 @@
 import 'package:epson_printer/epson_printer.dart';
-import 'dart:io';
 
 /// Universal line item class for receipts
-class LineItem {
+class PrinterLineItem {
   final String itemName;
   final int quantity;
   final double unitPrice;
   final double totalPrice;
 
-  LineItem({
+  PrinterLineItem({
     required this.itemName,
     required this.quantity,
     required this.unitPrice,
@@ -17,7 +16,7 @@ class LineItem {
 }
 
 /// Universal receipt data class for all printer brands
-class ReceiptData {
+class PrinterReceiptData {
   final String storeName;
   final String storeAddress;
   final String? storePhone;
@@ -26,12 +25,12 @@ class ReceiptData {
   final String? cashierName;
   final String? receiptNumber;
   final String? laneNumber;
-  final List<LineItem> items;
+  final List<PrinterLineItem> items;
   final String? thankYouMessage;
   final String? logoBase64;
   final DateTime? transactionDate;
 
-  ReceiptData({
+  PrinterReceiptData({
     required this.storeName,
     required this.storeAddress,
     this.storePhone,
@@ -48,14 +47,14 @@ class ReceiptData {
 }
 
 /// Universal label data class for all printer brands  
-class LabelData {
+class PrinterLabelData {
   final String productName;
   final String price;
   final String colorSize;
   final String barcode;
   final int quantity;
 
-  LabelData({
+  PrinterLabelData({
     required this.productName,
     required this.price,
     required this.colorSize,
@@ -234,8 +233,175 @@ class PrinterBridge {
 
   /// Print a receipt using the connected printer of the specified brand
   /// Returns true if print successful
-  static Future<bool> printReceipt(String brand, Map<String, dynamic> receiptData) async {
-    throw UnimplementedError('Print receipt not implemented yet');
+  static Future<bool> printReceipt(String brand, PrinterReceiptData receiptData) async {
+    switch (brand.toLowerCase()) {
+      case 'epson':
+        return _printEpsonReceipt(receiptData);
+      case 'star':
+        throw UnimplementedError('Star receipt printing not implemented yet');
+      case 'zebra':
+        throw UnimplementedError('Zebra receipt printing not implemented yet');
+      default:
+        throw ArgumentError('Unsupported brand: $brand');
+    }
+  }
+
+  static Future<bool> _printEpsonReceipt(PrinterReceiptData receiptData) async {
+    try {
+      // Build Epson commands from universal receipt data
+      final commands = _buildEpsonReceiptCommands(receiptData);
+      
+      if (commands.isEmpty) {
+        print('Epson receipt has no content');
+        return false;
+      }
+
+      final printJob = EpsonPrintJob(commands: commands);
+      await EpsonPrinter.printReceipt(printJob);
+      
+      return true;
+    } catch (e) {
+      print('Epson receipt print failed: $e');
+      return false;
+    }
+  }
+
+  static List<EpsonPrintCommand> _buildEpsonReceiptCommands(PrinterReceiptData receiptData) {
+    final List<EpsonPrintCommand> commands = [];
+    
+    // Center alignment for header
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'center'}
+    ));
+    
+    // Store name (bold, larger)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {'bold': 'true'}
+    ));
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': '${receiptData.storeName}\n'}
+    ));
+    
+    // Reset to normal style
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {'bold': 'false'}
+    ));
+    
+    // Store address
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': '${receiptData.storeAddress}\n'}
+    ));
+    
+    if (receiptData.storePhone != null) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': '${receiptData.storePhone}\n'}
+      ));
+    }
+    
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': '\n'}
+    ));
+    
+    // Left alignment for receipt details
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'left'}
+    ));
+    
+    // Receipt details
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': 'Date: ${receiptData.date} ${receiptData.time}\n'}
+    ));
+    
+    if (receiptData.receiptNumber != null) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': 'Receipt: ${receiptData.receiptNumber}\n'}
+      ));
+    }
+    
+    if (receiptData.cashierName != null) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': 'Cashier: ${receiptData.cashierName}\n'}
+      ));
+    }
+    
+    if (receiptData.laneNumber != null) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': 'Lane: ${receiptData.laneNumber}\n'}
+      ));
+    }
+    
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': '\n'}
+    ));
+    
+    // Items section
+    double total = 0.0;
+    for (final item in receiptData.items) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': '${item.quantity}x ${item.itemName}\n'}
+      ));
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': '    \$${item.totalPrice.toStringAsFixed(2)}\n'}
+      ));
+      total += item.totalPrice;
+    }
+    
+    // Total
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': '\n'}
+    ));
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {'bold': 'true'}
+    ));
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': 'Total: \$${total.toStringAsFixed(2)}\n'}
+    ));
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {'bold': 'false'}
+    ));
+    
+    // Footer message
+    if (receiptData.thankYouMessage != null) {
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': '\n'}
+      ));
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'align': 'center'}
+      ));
+      commands.add(EpsonPrintCommand(
+        type: EpsonCommandType.text,
+        parameters: {'data': '${receiptData.thankYouMessage}\n'}
+      ));
+    }
+    
+    // Cut paper
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.cut,
+      parameters: {}
+    ));
+    
+    return commands;
   }
 
   /// Print a label using the connected printer of the specified brand
