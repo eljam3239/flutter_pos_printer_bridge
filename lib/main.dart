@@ -2963,10 +2963,29 @@ class _MyHomePageState extends State<MyHomePage> {
         print('DEBUG: [$i] ${results[i]}');
       }
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('PrinterBridge found ${results.length} printers (check console for details)')),
-      );
+      // Test connection to first printer if any found
+      if (results.isNotEmpty) {
+        final firstPrinter = results[0];
+        print('DEBUG: Testing connection to: ${firstPrinter['raw']}');
+        
+        final success = await PrinterBridge.connect(
+          firstPrinter['brand']!,
+          firstPrinter['interface']!,
+          firstPrinter['address']!,
+        );
+        
+        print('DEBUG: Connection result: $success');
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Bridge: Found ${results.length} printers, connection: $success')),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PrinterBridge found ${results.length} printers')),
+        );
+      }
     } catch (e) {
       print('DEBUG: PrinterBridge error: $e');
       if (!mounted) return;

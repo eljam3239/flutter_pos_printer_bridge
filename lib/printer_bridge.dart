@@ -110,7 +110,63 @@ class PrinterBridge {
   /// Connect to a printer using brand, interface type, and connection string
   /// Returns true if connection successful
   static Future<bool> connect(String brand, String interface, String connectionString) async {
-    throw UnimplementedError('Connection not implemented yet');
+    switch (brand.toLowerCase()) {
+      case 'epson':
+        return _connectEpsonPrinter(interface, connectionString);
+      case 'star':
+        throw UnimplementedError('Star connection not implemented yet');
+      case 'zebra':
+        throw UnimplementedError('Zebra connection not implemented yet');
+      default:
+        throw ArgumentError('Unsupported brand: $brand');
+    }
+  }
+
+  static Future<bool> _connectEpsonPrinter(String interface, String connectionString) async {
+    try {
+      // Disconnect if already connected
+      try {
+        await EpsonPrinter.disconnect();
+        await Future.delayed(const Duration(milliseconds: 500));
+      } catch (_) {}
+
+      // Reconstruct the target string that Epson SDK expects
+      String target;
+      EpsonPortType portType;
+      
+      switch (interface.toLowerCase()) {
+        case 'tcp':
+          target = 'TCP:$connectionString';
+          portType = EpsonPortType.tcp;
+          break;
+        case 'bt':
+          target = 'BT:$connectionString';
+          portType = EpsonPortType.bluetooth;
+          break;
+        case 'ble':
+          target = 'BLE:$connectionString';
+          portType = EpsonPortType.bluetoothLe;
+          break;
+        case 'usb':
+          target = 'USB:$connectionString';
+          portType = EpsonPortType.usb;
+          break;
+        default:
+          throw ArgumentError('Unsupported Epson interface: $interface');
+      }
+
+      final settings = EpsonConnectionSettings(
+        portType: portType,
+        identifier: target,
+        timeout: portType == EpsonPortType.bluetoothLe ? 30000 : 15000,
+      );
+
+      await EpsonPrinter.connect(settings);
+      return true;
+    } catch (e) {
+      print('Epson connection failed: $e');
+      return false;
+    }
   }
 
   /// Print a receipt using the connected printer of the specified brand
