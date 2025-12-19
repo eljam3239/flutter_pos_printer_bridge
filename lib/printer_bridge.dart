@@ -1,6 +1,69 @@
 import 'package:epson_printer/epson_printer.dart';
 import 'dart:io';
 
+/// Universal line item class for receipts
+class LineItem {
+  final String itemName;
+  final int quantity;
+  final double unitPrice;
+  final double totalPrice;
+
+  LineItem({
+    required this.itemName,
+    required this.quantity,
+    required this.unitPrice,
+    required this.totalPrice,
+  });
+}
+
+/// Universal receipt data class for all printer brands
+class ReceiptData {
+  final String storeName;
+  final String storeAddress;
+  final String? storePhone;
+  final String date;
+  final String time;
+  final String? cashierName;
+  final String? receiptNumber;
+  final String? laneNumber;
+  final List<LineItem> items;
+  final String? thankYouMessage;
+  final String? logoBase64;
+  final DateTime? transactionDate;
+
+  ReceiptData({
+    required this.storeName,
+    required this.storeAddress,
+    this.storePhone,
+    required this.date,
+    required this.time,
+    this.cashierName,
+    this.receiptNumber,
+    this.laneNumber,
+    required this.items,
+    this.thankYouMessage,
+    this.logoBase64,
+    this.transactionDate,
+  });
+}
+
+/// Universal label data class for all printer brands  
+class LabelData {
+  final String productName;
+  final String price;
+  final String colorSize;
+  final String barcode;
+  final int quantity;
+
+  LabelData({
+    required this.productName,
+    required this.price,
+    required this.colorSize,
+    required this.barcode,
+    this.quantity = 1,
+  });
+}
+
 class PrinterBridge {
   /// Discover printers for a specific brand
   /// Returns list of discovered printers with their connection details
