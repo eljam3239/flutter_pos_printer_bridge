@@ -334,6 +334,26 @@ class PrinterBridge {
     }
   }
 
+  static Future<bool> _disconnectEpsonPrinter() async {
+    try {
+      await EpsonPrinter.disconnect();
+      return true;
+    } catch (e) {
+      print('Epson disconnect failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _disconnectZebraPrinter() async {
+    try {
+      await ZebraPrinter.disconnect();
+      return true;
+    } catch (e) {
+      print('Zebra disconnect failed: $e');
+      return false;
+    }
+  }
+
   /// Print a receipt using the connected printer of the specified brand
   /// Returns true if print successful
   static Future<bool> printReceipt(String brand, PrinterReceiptData receiptData) async {
@@ -344,6 +364,21 @@ class PrinterBridge {
         throw UnimplementedError('Star receipt printing not implemented yet');
       case 'zebra':
         throw UnimplementedError('Zebra receipt printing not implemented yet');
+      default:
+        throw ArgumentError('Unsupported brand: $brand');
+    }
+  }
+
+  /// Disconnect from the connected printer of the specified brand
+  /// Returns true if disconnect successful
+  static Future<bool> disconnect(String brand) async {
+    switch (brand.toLowerCase()) {
+      case 'epson':
+        return _disconnectEpsonPrinter();
+      case 'star':
+        throw UnimplementedError('Star disconnect not implemented yet');
+      case 'zebra':
+        return _disconnectZebraPrinter();
       default:
         throw ArgumentError('Unsupported brand: $brand');
     }
@@ -545,7 +580,7 @@ class PrinterBridge {
       case 'star':
         throw UnimplementedError('Star label printing not implemented yet');
       case 'zebra':
-        throw UnimplementedError('Zebra label printing not implemented yet');
+        return await _printZebraLabel(labelData);
       default:
         throw ArgumentError('Unsupported printer brand: $brand');
     }
@@ -648,5 +683,147 @@ class PrinterBridge {
     ));
     
     return commands;
+  }
+
+  static Future<bool> _printZebraLabel(PrinterLabelData labelData) async {
+    try {
+      // Get actual printer dimensions
+      Map<String, dynamic> dimensions;
+      try {
+        print('Fetching Zebra printer dimensions for label...');
+        dimensions = await ZebraPrinter.getPrinterDimensions();
+        print('Raw dimensions received: $dimensions');
+      } catch (e) {
+        print('Failed to get dimensions, using defaults: $e');
+        dimensions = {
+          'printWidthInDots': 386, // ZD410 default
+          'labelLengthInDots': 212, // common label height
+          'dpi': 203, // standard Zebra DPI
+        };
+      }
+      
+      final width = dimensions['printWidthInDots'] ?? 386;
+      final height = dimensions['labelLengthInDots'] ?? 212;
+      final dpi = dimensions['dpi'] ?? 203;
+      
+      // Validate dimensions and retry if needed
+      if (width < 100 || height < 100) {
+        print('Dimensions seem invalid, retrying...');
+        await Future.delayed(const Duration(milliseconds: 300));
+        try {
+          final retryDimensions = await ZebraPrinter.getPrinterDimensions();
+          print('Retry dimensions: $retryDimensions');
+          final retryWidth = retryDimensions['printWidthInDots'] ?? 386;
+          final retryHeight = retryDimensions['labelLengthInDots'] ?? 212;
+          final retryDpi = retryDimensions['dpi'] ?? 203;
+          
+          print('Using Zebra label dimensions (retry): ${retryWidth}x${retryHeight} @ ${retryDpi}dpi');
+          final labelZpl = _generateZebraLabelZPL(retryWidth, retryHeight, retryDpi, labelData);
+          
+          // Print labels based on quantity
+          for (int i = 0; i < labelData.quantity; i++) {
+            await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
+            if (i < labelData.quantity - 1) {
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+          }
+        } catch (retryError) {
+          print('Retry failed, using defaults: $retryError');
+          // Fallback to defaults
+          final labelZpl = _generateZebraLabelZPL(386, 212, 203, labelData);
+          for (int i = 0; i < labelData.quantity; i++) {
+            await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
+            if (i < labelData.quantity - 1) {
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+          }
+        }
+      } else {
+        print('Using Zebra label dimensions: ${width}x${height} @ ${dpi}dpi');
+        final labelZpl = _generateZebraLabelZPL(width, height, dpi, labelData);
+        
+        // Print labels based on quantity
+        for (int i = 0; i < labelData.quantity; i++) {
+          await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
+          if (i < labelData.quantity - 1) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+        }
+      }
+      
+      return true;
+    } catch (e) {
+      print('Zebra label print failed: $e');
+      return false;
+    }
+  }
+
+  static String _generateZebraLabelZPL(int width, int height, int dpi, PrinterLabelData labelData) {
+    // Extract label content from the data object
+    final productName = labelData.productName;
+    final colorSize = labelData.colorSize;
+    final scancode = labelData.barcode;
+    final price = labelData.price;
+    
+    // Paper details - use actual detected width in dots
+    final paperWidthDots = width;
+    
+    // Helper function to get character width in dots based on font size and DPI
+    int getCharWidthInDots(int fontSize, int dpi) {
+      // Based on empirical testing and Zebra font matrices
+      // Using a more conservative estimate that matches actual rendering
+      if (fontSize <= 25) {
+        return 10; // For smaller fonts like size 25
+      } else if (fontSize <= 38) {
+        return 20; // For medium fonts like size 38
+      } else {
+        return (fontSize * 0.5).round(); // For larger fonts, scale proportionally
+      }
+    }
+    
+    // Calculate barcode position
+    final scancodeLength = scancode.length;
+    // Estimate barcode width for Code 128
+    // Code 128: Each character takes ~11 modules + start/stop characters
+    final totalBarcodeCharacters = scancodeLength + 3; // +3 for start, check, and stop characters
+    const moduleWidth = 2; // from ^BY2
+    final estimatedBarcodeWidth = totalBarcodeCharacters * 11 * moduleWidth;
+    
+    // Calculate text widths using font size and DPI
+    final productNameCharWidth = getCharWidthInDots(38, dpi);
+    final colorSizeCharWidth = getCharWidthInDots(25, dpi);
+    final priceCharWidth = getCharWidthInDots(38, dpi);
+    
+    final estimatedProductNameWidth = productName.length * productNameCharWidth;
+    final estimatedColorSizeWidth = colorSize.length * colorSizeCharWidth;
+    final estimatedPriceWidth = price.length * priceCharWidth;
+
+    print('Zebra label font calculations - DPI: $dpi, Font 38: ${productNameCharWidth}dots/char, Font 25: ${colorSizeCharWidth}dots/char');
+    print('Zebra label text widths - ProductName: ${estimatedProductNameWidth}dots, ColorSize: ${estimatedColorSizeWidth}dots, Price: ${estimatedPriceWidth}dots');
+
+    // Calculate centered X position for each element
+    final barcodeX = ((paperWidthDots - estimatedBarcodeWidth) ~/ 2).clamp(0, paperWidthDots - estimatedBarcodeWidth);
+    final productNameX = (paperWidthDots - estimatedProductNameWidth) ~/ 2;
+    final colorSizeX = (paperWidthDots - estimatedColorSizeWidth) ~/ 2;
+    final priceX = (paperWidthDots - estimatedPriceWidth) ~/ 2;
+    
+    print('Zebra label positions - ProductName: ($productNameX,14), Price: ($priceX,52), ColorSize: ($colorSizeX,90), Barcode: ($barcodeX,124)');
+
+    final labelZpl = '''
+^XA
+^CF0,27
+^FO104,150
+^FD^FS
+^CF0,25
+^FO$colorSizeX,90^FD$colorSize^FS
+^BY2,3,50
+^FO$barcodeX,124^BCN^FD$scancode^FS
+^CF0,38
+^FO$priceX,52^FD$price^FS
+^CF0,38
+^FO$productNameX,14^FD$productName^FS
+^XZ''';
+
+    return labelZpl;
   }
 }
