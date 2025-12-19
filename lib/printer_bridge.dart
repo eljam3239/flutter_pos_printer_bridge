@@ -267,141 +267,170 @@ class PrinterBridge {
   }
 
   static List<EpsonPrintCommand> _buildEpsonReceiptCommands(PrinterReceiptData receiptData) {
-    final List<EpsonPrintCommand> commands = [];
+    final List<EpsonPrintCommand> cmds = [];
+
+    // Calculate the correct characters per line based on detected paper width
+    int effectiveCharsPerLine = 48; // Default to 80mm width
     
-    // Center alignment for header
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'align': 'center'}
-    ));
-    
-    // Store name (bold, larger)
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.textStyle,
-      parameters: {'bold': 'true'}
-    ));
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': '${receiptData.storeName}\n'}
-    ));
-    
-    // Reset to normal style
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.textStyle,
-      parameters: {'bold': 'false'}
-    ));
-    
+    // Helper functions that use the correct character width
+    String horizontalLine() => '-' * effectiveCharsPerLine;
+
+    // Wrap long text to fit within the specified character width
+    List<String> wrapText(String text, int maxWidth) {
+      text = text.trim();
+      if (text.isEmpty) return [];
+      
+      final List<String> lines = [];
+      final words = text.split(' ');
+      String currentLine = '';
+      
+      for (String word in words) {
+        final testLine = currentLine.isEmpty ? word : '$currentLine $word';
+        if (testLine.length <= maxWidth) {
+          currentLine = testLine;
+        } else {
+          if (currentLine.isNotEmpty) {
+            lines.add(currentLine);
+            currentLine = word;
+          } else {
+            // Single word longer than maxWidth - just add it
+            lines.add(word);
+          }
+        }
+      }
+      
+      if (currentLine.isNotEmpty) {
+        lines.add(currentLine);
+      }
+      
+      return lines;
+    }
+
+    String leftRight(String left, String right) {
+      left = left.trim();
+      right = right.trim();
+      final space = effectiveCharsPerLine - left.length - right.length;
+      if (space < 1) {
+        final maxLeft = effectiveCharsPerLine - right.length - 1;
+        if (maxLeft < 1) return (left + right).substring(0, effectiveCharsPerLine);
+        left = left.substring(0, maxLeft);
+        return '$left $right';
+      }
+      return left + ' ' * space + right;
+    }
+
+    String qtyNamePrice(String qty, String name, String price) {
+      // Layout: qty (3) name (left) price (right) within paper width.
+      qty = qty.trim();
+      name = name.trim();
+      price = price.trim();
+      
+      // Adjust field widths for narrower paper
+      final qtyWidth = effectiveCharsPerLine >= 40 ? 4 : 3; // e.g. '99x' for narrow paper
+      final priceWidth = effectiveCharsPerLine >= 40 ? 8 : 6; // Shorter price field for narrow paper
+      
+      final qtyStr = qty.length > (qtyWidth - 1) ? qty.substring(0, qtyWidth - 1) : qty;
+      final qtyField = (qtyStr + 'x').padRight(qtyWidth);
+      
+      // Remaining width for name = total - qtyWidth - priceWidth
+      final nameWidth = effectiveCharsPerLine - qtyWidth - priceWidth;
+      String nameTrunc = name;
+      if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
+      
+      // Ensure price has '$' prefix
+      final formattedPrice = price.startsWith('\$') ? price : '\$$price';
+      final priceField = formattedPrice.padLeft(priceWidth);
+      
+      return qtyField + nameTrunc.padRight(nameWidth) + priceField;
+    }
+
+    // Store title/header
+    String title = receiptData.storeName.trim();
+    if (title.isNotEmpty) {
+      // Use SDK centering like labels instead of manual padding
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap title text to respect the selected paper width
+      final wrappedTitleLines = wrapText(title, effectiveCharsPerLine);
+      for (String line in wrappedTitleLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
+      // Reset to left alignment after title
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+    }
+
     // Store address
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': '${receiptData.storeAddress}\n'}
-    ));
-    
-    if (receiptData.storePhone != null) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': '${receiptData.storePhone}\n'}
-      ));
+    if (receiptData.storeAddress.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap location text to respect the selected paper width
+      final wrappedLocationLines = wrapText(receiptData.storeAddress.trim(), effectiveCharsPerLine);
+      for (String line in wrappedLocationLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
-    
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': '\n'}
-    ));
-    
-    // Left alignment for receipt details
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'align': 'left'}
-    ));
-    
-    // Receipt details
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': 'Date: ${receiptData.date} ${receiptData.time}\n'}
-    ));
-    
-    if (receiptData.receiptNumber != null) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': 'Receipt: ${receiptData.receiptNumber}\n'}
-      ));
-    }
-    
-    if (receiptData.cashierName != null) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': 'Cashier: ${receiptData.cashierName}\n'}
-      ));
-    }
-    
-    if (receiptData.laneNumber != null) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': 'Lane: ${receiptData.laneNumber}\n'}
-      ));
-    }
-    
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': '\n'}
-    ));
-    
-    // Items section
-    double total = 0.0;
+
+    // Centered 'Receipt'
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\nReceipt\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+
+    // Date Time (left) vs Cashier (right) - center the whole line using SDK
+    final dateTime = '${receiptData.date.trim()} ${receiptData.time.trim()}';
+    final cashierStr = receiptData.cashierName != null 
+        ? 'Cashier: ${receiptData.cashierName!.trim()}' 
+        : 'Cashier: N/A';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(dateTime, cashierStr) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+
+    // Receipt # vs Lane - center the whole line using SDK
+    final recLine = receiptData.receiptNumber != null 
+        ? 'Receipt: ${receiptData.receiptNumber!.trim()}' 
+        : 'Receipt: N/A';
+    final laneLine = receiptData.laneNumber != null 
+        ? 'Lane: ${receiptData.laneNumber!.trim()}' 
+        : 'Lane: N/A';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(recLine, laneLine) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+
+    // Blank line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+
+    // Horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+
+    // Items - center each item line using SDK
     for (final item in receiptData.items) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': '${item.quantity}x ${item.itemName}\n'}
-      ));
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': '    \$${item.totalPrice.toStringAsFixed(2)}\n'}
-      ));
-      total += item.totalPrice;
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 
+        'data': qtyNamePrice(item.quantity.toString(), item.itemName, item.totalPrice.toStringAsFixed(2)) + '\n' 
+      }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
-    
-    // Total
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': '\n'}
-    ));
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.textStyle,
-      parameters: {'bold': 'true'}
-    ));
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'data': 'Total: \$${total.toStringAsFixed(2)}\n'}
-    ));
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.textStyle,
-      parameters: {'bold': 'false'}
-    ));
-    
+
+    // Second horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
+
     // Footer message
-    if (receiptData.thankYouMessage != null) {
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': '\n'}
-      ));
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'align': 'center'}
-      ));
-      commands.add(EpsonPrintCommand(
-        type: EpsonCommandType.text,
-        parameters: {'data': '${receiptData.thankYouMessage}\n'}
-      ));
+    if (receiptData.thankYouMessage != null && receiptData.thankYouMessage!.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      // Wrap footer text to respect the selected paper width
+      final wrappedFooterLines = wrapText(receiptData.thankYouMessage!.trim(), effectiveCharsPerLine);
+      for (String line in wrappedFooterLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
-    
-    // Cut paper
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.cut,
-      parameters: {}
-    ));
-    
-    return commands;
+
+    // End feeds + cut
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+    return cmds;
   }
 
   /// Print a label using the connected printer of the specified brand
