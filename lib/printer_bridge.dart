@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:epson_printer/epson_printer.dart';
+import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
 
 /// Universal line item class for receipts
@@ -79,7 +80,7 @@ class PrinterBridge {
       case 'epson':
         return _discoverEpsonPrinters();
       case 'star':
-        throw UnimplementedError('Star discovery not implemented yet');
+        return _discoverStarPrinters();
       case 'zebra':
         return _discoverZebraPrinters();
       default:
@@ -133,6 +134,61 @@ class PrinterBridge {
 
     // Convert to hybrid format
     return allPrinters.map((raw) => _parseEpsonPrinter(raw)).toList();
+  }
+
+  static Future<List<Map<String, String>>> _discoverStarPrinters() async {
+    try {
+      print('Discovering Star printers...');
+      final printers = await star.StarPrinter.discoverPrinters();
+      print('Star discovery found ${printers.length} printers');
+      
+      // Convert to hybrid format
+      return printers.map((raw) => _parseStarPrinter(raw)).toList();
+    } catch (e) {
+      print('Star discovery error: $e');
+      // Return empty list on error rather than throwing
+      return [];
+    }
+  }
+
+  static Map<String, String> _parseStarPrinter(String raw) {
+    // Parse Star format: "LAN:192.168.1.100:TSP654II", "BT:00:11:22:33:44:55:mPOP", etc.
+    // Format varies but generally: INTERFACE:ADDRESS:MODEL
+    
+    final parts = raw.split(':');
+    if (parts.length < 2) {
+      return {
+        'raw': raw,
+        'brand': 'star',
+        'interface': '',
+        'address': raw,
+        'model': '',
+        'displayName': raw,
+      };
+    }
+    
+    final interface = parts[0].toLowerCase();
+    final address = parts.length > 1 ? parts[1] : '';
+    final model = parts.length > 2 ? parts[2] : '';
+    
+    // Create user-friendly display name
+    String displayName;
+    if (model.isNotEmpty) {
+      displayName = '$model ($interface: $address)';
+    } else if (address.isNotEmpty) {
+      displayName = '$address ($interface)';
+    } else {
+      displayName = raw;
+    }
+    
+    return {
+      'raw': raw,
+      'brand': 'star',
+      'interface': interface, // lan, bt, ble, usb
+      'address': address,
+      'model': model,
+      'displayName': displayName,
+    };
   }
 
   static Map<String, String> _parseEpsonPrinter(String raw) {
@@ -255,7 +311,7 @@ class PrinterBridge {
       case 'epson':
         return _connectEpsonPrinter(interface, connectionString);
       case 'star':
-        throw UnimplementedError('Star connection not implemented yet');
+        return _connectStarPrinter(interface, connectionString);
       case 'zebra':
         return _connectZebraPrinter(interface, connectionString);
       default:
@@ -309,6 +365,63 @@ class PrinterBridge {
       return true;
     } catch (e) {
       print('Epson connection failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _connectStarPrinter(
+    String interface,
+    String connectionString,
+  ) async {
+    try {
+      // Force disconnect if already connected
+      try {
+        await star.StarPrinter.disconnect();
+        await Future.delayed(const Duration(milliseconds: 500));
+      } catch (_) {
+        // Ignore disconnect errors
+      }
+
+      // Parse interface type and identifier from connectionString
+      star.StarInterfaceType interfaceType;
+      String identifier;
+      
+      // connectionString is the raw discovery string like "LAN:192.168.1.100:TSP654II"
+      if (connectionString.startsWith('LAN:')) {
+        interfaceType = star.StarInterfaceType.lan;
+        final parts = connectionString.substring(4).split(':');
+        identifier = parts[0]; // Take IP/MAC before model info
+      } else if (connectionString.startsWith('BT:')) {
+        interfaceType = star.StarInterfaceType.bluetooth;
+        final parts = connectionString.substring(3).split(':');
+        identifier = parts[0]; // Take MAC before model info
+      } else if (connectionString.startsWith('BLE:')) {
+        interfaceType = star.StarInterfaceType.bluetoothLE;
+        final parts = connectionString.substring(4).split(':');
+        identifier = parts[0]; // Take MAC before model info
+      } else if (connectionString.startsWith('USB:')) {
+        interfaceType = star.StarInterfaceType.usb;
+        final parts = connectionString.substring(4).split(':');
+        identifier = parts[0]; // Take identifier before model info
+      } else {
+        // Default to LAN if no prefix
+        interfaceType = star.StarInterfaceType.lan;
+        identifier = connectionString.split(':')[0];
+      }
+      
+      print('PrinterBridge: Connecting to Star $interfaceType printer: $identifier');
+      
+      final settings = star.StarConnectionSettings(
+        interfaceType: interfaceType,
+        identifier: identifier,
+      );
+      
+      await star.StarPrinter.connect(settings);
+      print('PrinterBridge: Star connection successful');
+      
+      return true;
+    } catch (e) {
+      print('PrinterBridge: Star connection failed: $e');
       return false;
     }
   }
@@ -369,6 +482,16 @@ class PrinterBridge {
     }
   }
 
+  static Future<bool> _disconnectStarPrinter() async {
+    try {
+      await star.StarPrinter.disconnect();
+      return true;
+    } catch (e) {
+      print('Star disconnect failed: $e');
+      return false;
+    }
+  }
+
   static Future<bool> _disconnectZebraPrinter() async {
     try {
       await ZebraPrinter.disconnect();
@@ -404,7 +527,7 @@ class PrinterBridge {
       case 'epson':
         return _disconnectEpsonPrinter();
       case 'star':
-        throw UnimplementedError('Star disconnect not implemented yet');
+        return _disconnectStarPrinter();
       case 'zebra':
         return _disconnectZebraPrinter();
       default:
