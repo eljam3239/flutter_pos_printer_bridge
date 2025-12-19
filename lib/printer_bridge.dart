@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:epson_printer/epson_printer.dart';
+import 'package:zebra_printer/zebra_printer.dart';
 
 /// Universal line item class for receipts
 class PrinterLineItem {
@@ -73,7 +76,7 @@ class PrinterBridge {
       case 'star':
         throw UnimplementedError('Star discovery not implemented yet');
       case 'zebra':
-        throw UnimplementedError('Zebra discovery not implemented yet');
+        return _discoverZebraPrinters();
       default:
         throw ArgumentError('Unsupported brand: $brand');
     }
@@ -169,6 +172,65 @@ class PrinterBridge {
     };
   }
 
+  static Future<List<Map<String, String>>> _discoverZebraPrinters() async {
+    final List<DiscoveredPrinter> allPrinters = [];
+    
+    try {
+      // Network discovery (works on all platforms)
+      try {
+        final networkPrinters = await ZebraPrinter.discoverNetworkPrintersAuto();
+        allPrinters.addAll(networkPrinters);
+        print('Zebra network discovery found ${networkPrinters.length} printers');
+      } catch (e) {
+        print('Zebra network discovery failed: $e');
+      }
+      
+      // Bluetooth discovery (works on all platforms)
+      try {
+        final bluetoothPrinters = await ZebraPrinter.discoverBluetoothPrinters();
+        allPrinters.addAll(bluetoothPrinters);
+        print('Zebra Bluetooth discovery found ${bluetoothPrinters.length} printers');
+      } catch (e) {
+        print('Zebra Bluetooth discovery failed: $e');
+      }
+      
+      // USB discovery (Android only)
+      if (!Platform.isIOS) {
+        try {
+          final usbPrinters = await ZebraPrinter.discoverUsbPrinters();
+          allPrinters.addAll(usbPrinters);
+          print('Zebra USB discovery found ${usbPrinters.length} printers');
+        } catch (e) {
+          print('Zebra USB discovery failed: $e');
+        }
+      }
+      
+    } catch (e) {
+      print('Zebra discovery failed: $e');
+      rethrow;
+    }
+    
+    return allPrinters.map((discoveredPrinter) => _parseZebraPrinter(discoveredPrinter)).toList();
+  }
+
+  static Map<String, String> _parseZebraPrinter(DiscoveredPrinter printer) {
+    // Convert DiscoveredPrinter to our universal format
+    final interface = printer.interfaceType.toLowerCase();
+    final address = printer.address;
+    final model = printer.friendlyName ?? 'Unknown';
+    
+    // Create a raw string similar to Epson format for consistency
+    final raw = '${printer.interfaceType.toUpperCase()}:${printer.address}:${printer.friendlyName ?? printer.address}';
+    
+    return {
+      'raw': raw,
+      'brand': 'zebra',
+      'interface': interface,
+      'address': address,
+      'model': model,
+    };
+  }
+
   /// Connect to a printer using brand, interface type, and connection string
   /// Returns true if connection successful
   static Future<bool> connect(String brand, String interface, String connectionString) async {
@@ -178,7 +240,7 @@ class PrinterBridge {
       case 'star':
         throw UnimplementedError('Star connection not implemented yet');
       case 'zebra':
-        throw UnimplementedError('Zebra connection not implemented yet');
+        return _connectZebraPrinter(interface, connectionString);
       default:
         throw ArgumentError('Unsupported brand: $brand');
     }
@@ -227,6 +289,47 @@ class PrinterBridge {
       return true;
     } catch (e) {
       print('Epson connection failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _connectZebraPrinter(String interface, String connectionString) async {
+    try {
+      // Determine interface type for connection
+      ZebraInterfaceType interfaceType;
+      switch (interface.toLowerCase()) {
+        case 'bluetooth':
+        case 'bt':
+        case 'ble':
+          interfaceType = ZebraInterfaceType.bluetooth;
+          break;
+        case 'usb':
+          interfaceType = ZebraInterfaceType.usb;
+          break;
+        case 'tcp':
+        case 'network':
+        case 'wifi':
+        default:
+          interfaceType = ZebraInterfaceType.tcp;
+          break;
+      }
+
+      final settings = ZebraConnectionSettings(
+        interfaceType: interfaceType,
+        identifier: connectionString,
+        timeout: 15000,
+      );
+
+      print('Connecting to Zebra printer: $connectionString via ${interface.toUpperCase()}');
+      await ZebraPrinter.connect(settings);
+      print('Zebra connection successful');
+      
+      // Add small delay to ensure connection is fully established
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      return true;
+    } catch (e) {
+      print('Zebra connection failed: $e');
       return false;
     }
   }
