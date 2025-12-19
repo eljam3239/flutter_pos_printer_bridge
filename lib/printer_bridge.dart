@@ -435,7 +435,115 @@ class PrinterBridge {
 
   /// Print a label using the connected printer of the specified brand
   /// Returns true if print successful
-  static Future<bool> printLabel(String brand, Map<String, dynamic> labelData) async {
-    throw UnimplementedError('Print label not implemented yet');
+  static Future<bool> printLabel(String brand, PrinterLabelData labelData) async {
+    switch (brand.toLowerCase()) {
+      case 'epson':
+        return await _printEpsonLabel(labelData);
+      case 'star':
+        throw UnimplementedError('Star label printing not implemented yet');
+      case 'zebra':
+        throw UnimplementedError('Zebra label printing not implemented yet');
+      default:
+        throw ArgumentError('Unsupported printer brand: $brand');
+    }
+  }
+
+  static Future<bool> _printEpsonLabel(PrinterLabelData labelData) async {
+    try {
+      final commands = _buildEpsonLabelCommands(labelData);
+      final printJob = EpsonPrintJob(commands: commands);
+      
+      // Print multiple labels based on quantity setting
+      for (int i = 0; i < labelData.quantity; i++) {
+        await EpsonPrinter.printReceipt(printJob);
+        
+        // Small delay between prints to avoid overwhelming the printer
+        if (i < labelData.quantity - 1) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
+      
+      return true;
+    } catch (e) {
+      print('Epson label print failed: $e');
+      return false;
+    }
+  }
+
+  static List<EpsonPrintCommand> _buildEpsonLabelCommands(PrinterLabelData labelData) {
+    final List<EpsonPrintCommand> commands = [];
+    
+    // Use SDK centering for all elements to match barcode centering
+    // Set center alignment for all text elements
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'center'}
+    ));
+    
+    // Set bold style for product name
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false', 
+        'bold': 'true',
+        'color': '1'
+      }
+    ));
+    
+    // Product name (centered at top, bold)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': labelData.productName.trim() + '\n'}
+    ));
+    
+    // Reset text style to normal
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false',
+        'bold': 'false', 
+        'color': '1'
+      }
+    ));
+    
+    // Price (centered under product name)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': labelData.price.trim() + '\n'}
+    ));
+    
+    // Size/Color (centered under price)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': labelData.colorSize.trim() + '\n'}
+    ));
+    
+    // Barcode (center alignment already set)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.barcode,
+      parameters: {
+        'data': labelData.barcode.trim(),
+        'type': 'CODE128_AUTO',
+        'hri': 'below',
+        'width': 2,
+        'height': 35,
+        'font': 'A',
+      }
+    ));
+    
+    // Reset to left alignment after all label content
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'left'}
+    ));
+    
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.cut,
+      parameters: {}
+    ));
+    
+    return commands;
   }
 }

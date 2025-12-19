@@ -3008,6 +3008,18 @@ class _MyHomePageState extends State<MyHomePage> {
           final printResult = await PrinterBridge.printReceipt(firstPrinter['brand']!, receiptData);
           print('DEBUG: Print result: $printResult');
           
+          // Test label printing
+          print('DEBUG: Testing label printing...');
+          final labelData = PrinterLabelData(
+            productName: 'Sample Product',
+            price: '\$5.00',
+            colorSize: 'Small Turquoise',
+            barcode: '123456789',
+            quantity: 1,
+          );
+          final labelResult = await PrinterBridge.printLabel(firstPrinter['brand']!, labelData);
+          print('DEBUG: Label result: $labelResult');
+          
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Bridge: Found ${results.length}, connected: $success, printed: $printResult')),
