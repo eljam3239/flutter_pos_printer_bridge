@@ -58,6 +58,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // Zebra-specific fields for direct access
   List<DiscoveredPrinter> _zebraDiscoveredPrinters = [];
   DiscoveredPrinter? _selectedZebraPrinter;
+  Map<String, int>? _zebraDimensions; // Store dimensions after connection
 
   @override
   void initState() {
@@ -519,6 +520,34 @@ class _MyHomePageState extends State<MyHomePage> {
       
       debugPrint(success ? '✅ Connection successful' : '❌ Connection failed');
       
+      // For Zebra printers, fetch and store dimensions after successful connection
+      if (success && _selectedBrand == PrinterBrand.zebra) {
+        try {
+          debugPrint('TestBridge: Fetching Zebra dimensions after connection...');
+          final dimensions = await PrinterBridge.getZebraDimensions(forceRefresh: true);
+          if (dimensions != null) {
+            setState(() {
+              _zebraDimensions = dimensions;
+            });
+            debugPrint('TestBridge: Stored Zebra dimensions: $dimensions');
+            
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Connected! Zebra dimensions: ${dimensions['printWidthInDots']}x${dimensions['labelLengthInDots']} @ ${dimensions['dpi']}DPI'
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+            return; // Skip generic success message
+          }
+        } catch (e) {
+          debugPrint('TestBridge: Error fetching Zebra dimensions: $e');
+        }
+      }
+      
       if (success && _selectedBrand == PrinterBrand.epson) {
         // Try to detect paper width after successful Epson connection
         try {
@@ -541,6 +570,34 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         } catch (e) {
           debugPrint('📏 Auto paper width detection failed: $e');
+          // Continue to show generic success message
+        }
+      }
+      
+      if (success && _selectedBrand == PrinterBrand.zebra) {
+        // Try to fetch dimensions after successful Zebra connection
+        try {
+          debugPrint('TestBridge: Fetching Zebra dimensions after connection...');
+          final dimensions = await PrinterBridge.getZebraDimensions(forceRefresh: true);
+          if (dimensions != null && mounted) {
+            setState(() {
+              _zebraDimensions = dimensions;
+            });
+            
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Connected! Zebra dimensions: ${dimensions['printWidthInDots']}x${dimensions['labelLengthInDots']} @ ${dimensions['dpi']}DPI'
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+            debugPrint('📐 Stored Zebra dimensions: $dimensions');
+            return; // Skip the generic success message
+          }
+        } catch (e) {
+          debugPrint('📐 Zebra dimension fetch failed: $e');
           // Continue to show generic success message
         }
       }
@@ -680,17 +737,23 @@ class _MyHomePageState extends State<MyHomePage> {
         thankYouMessage: 'Thank you for testing PrinterBridge!',
       );
       
-      final success = await PrinterBridge.printReceipt(_selectedPrinter!['brand']!, receiptData);
-      
-      debugPrint(success ? '✅ Receipt print successful' : '❌ Receipt print failed');
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success ? 'Receipt printed successfully!' : 'Receipt print failed'),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
+      // For Zebra printers with stored dimensions, use enhanced printing with dynamic height
+      if (_selectedBrand == PrinterBrand.zebra && _zebraDimensions != null) {
+        await _printZebraReceiptWithDynamicHeight(receiptData);
+      } else {
+        // For other brands or when dimensions not available, use standard PrinterBridge
+        final success = await PrinterBridge.printReceipt(_selectedPrinter!['brand']!, receiptData);
+        
+        debugPrint(success ? '✅ Receipt print successful' : '❌ Receipt print failed');
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Receipt printed successfully!' : 'Receipt print failed'),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+      }
       
     } catch (e) {
       debugPrint('❌ Receipt print error: $e');
@@ -827,6 +890,86 @@ class _MyHomePageState extends State<MyHomePage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Model-optimized label error: $e')),
+      );
+    }
+  }
+
+  /// Print Zebra receipt with dynamic height calculation (like main.dart)
+  Future<void> _printZebraReceiptWithDynamicHeight(PrinterReceiptData receiptData) async {
+    if (_zebraDimensions == null) {
+      throw Exception('Zebra dimensions not available');
+    }
+
+    final width = _zebraDimensions!['printWidthInDots']!;
+    final originalHeight = _zebraDimensions!['labelLengthInDots']!;
+    final dpi = _zebraDimensions!['dpi']!;
+    
+    debugPrint('🧾 Using Zebra dimensions for receipt: ${width}x${originalHeight} @ ${dpi}DPI');
+    
+    // Calculate required height based on receipt content (same logic as main.dart)
+    const baseHeight = 650; // Base receipt elements height in dots
+    const itemHeight = 56;  // Height per line item in dots
+    const marginHeight = 100; // Bottom margin in dots
+    final calculatedHeight = baseHeight + (receiptData.items.length * itemHeight) + marginHeight;
+    
+    debugPrint('🧾 Receipt height calculation:');
+    debugPrint('   Base height: $baseHeight dots');
+    debugPrint('   Items (${receiptData.items.length}): ${receiptData.items.length * itemHeight} dots');
+    debugPrint('   Margin: $marginHeight dots');
+    debugPrint('   Total calculated: $calculatedHeight dots');
+    debugPrint('   Original height: $originalHeight dots');
+    
+    try {
+      if (calculatedHeight > originalHeight) {
+        debugPrint('🧾 Dynamic height needed! Setting to $calculatedHeight dots');
+        
+        // Set new label length to accommodate the receipt
+        final success = await PrinterBridge.setZebraLabelLength(calculatedHeight);
+        if (success) {
+          debugPrint('✅ Successfully set dynamic label length to $calculatedHeight dots');
+          
+          // Generate and print ZPL with new height
+          final receiptZpl = PrinterBridge.generateZebraReceiptZPL(width, calculatedHeight, dpi, receiptData);
+          await ZebraPrinter.sendCommands(receiptZpl, language: ZebraPrintLanguage.zpl);
+          
+          // Restore original height
+          await PrinterBridge.setZebraLabelLength(originalHeight);
+          debugPrint('🔄 Restored original label length to $originalHeight dots');
+          
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Zebra receipt printed with dynamic height! ($calculatedHeight dots)'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        } else {
+          throw Exception('Failed to set dynamic label length');
+        }
+      } else {
+        debugPrint('🧾 Receipt fits in original height, printing normally');
+        
+        // Generate and print ZPL with original height
+        final receiptZpl = PrinterBridge.generateZebraReceiptZPL(width, originalHeight, dpi, receiptData);
+        await ZebraPrinter.sendCommands(receiptZpl, language: ZebraPrintLanguage.zpl);
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Zebra receipt printed successfully! (${originalHeight} dots)'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Zebra dynamic height receipt error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Zebra receipt error: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }

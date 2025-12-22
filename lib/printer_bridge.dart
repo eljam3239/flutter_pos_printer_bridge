@@ -107,6 +107,9 @@ class PrinterLabelData {
 class PrinterBridge {
   /// Epson printer configuration
   static final EpsonConfig epsonConfig = EpsonConfig();
+  
+  /// Cached Zebra printer dimensions to avoid repeated API calls
+  static Map<String, int>? _cachedZebraDimensions;
 
   /// Discover printers for a specific brand
   /// Returns list of discovered printers with their connection details
@@ -430,6 +433,114 @@ class PrinterBridge {
     }
   }
 
+  /// Get Zebra printer dimensions (width, height, DPI, etc.)
+  /// Returns cached dimensions if available, otherwise fetches fresh data
+  /// Only works for Zebra printers - returns null for other brands
+  static Future<Map<String, int>?> getZebraDimensions({bool forceRefresh = false}) async {
+    if (!forceRefresh && _cachedZebraDimensions != null) {
+      debugPrint('PrinterBridge: Using cached Zebra dimensions');
+      return Map<String, int>.from(_cachedZebraDimensions!);
+    }
+
+    try {
+      debugPrint('PrinterBridge: Fetching fresh Zebra dimensions...');
+      final dimensions = await ZebraPrinter.getPrinterDimensions();
+      
+      // Cache the dimensions for future use
+      _cachedZebraDimensions = Map<String, int>.from(dimensions);
+      
+      debugPrint('PrinterBridge: Zebra dimensions cached: $_cachedZebraDimensions');
+      return Map<String, int>.from(_cachedZebraDimensions!);
+    } catch (e) {
+      debugPrint('PrinterBridge: Failed to get Zebra dimensions: $e');
+      return null;
+    }
+  }
+
+  /// Set Zebra printer label length in dots
+  /// Also clears cached dimensions to force refresh on next access
+  /// Only works for Zebra printers
+  static Future<bool> setZebraLabelLength(int lengthInDots) async {
+    try {
+      debugPrint('PrinterBridge: Setting Zebra label length to $lengthInDots dots');
+      await ZebraPrinter.setLabelLength(lengthInDots);
+      
+      // Clear cached dimensions since we changed the label length
+      _cachedZebraDimensions = null;
+      debugPrint('PrinterBridge: Cleared cached dimensions after label length change');
+      
+      return true;
+    } catch (e) {
+      debugPrint('PrinterBridge: Failed to set Zebra label length: $e');
+      return false;
+    }
+  }
+
+  /// Set Zebra printer dimensions using width and height in inches
+  /// Automatically converts to dots based on DPI and clears cache
+  /// Only works for Zebra printers
+  static Future<bool> setZebraDimensions({
+    required double widthInches,
+    required double heightInches,
+    int? dpi,
+  }) async {
+    try {
+      // Get current DPI if not provided
+      final currentDimensions = await getZebraDimensions();
+      final effectiveDpi = dpi ?? currentDimensions?['dpi'] ?? 203;
+      
+      // Convert inches to dots
+      final widthInDots = (widthInches * effectiveDpi).round();
+      final heightInDots = (heightInches * effectiveDpi).round();
+      
+      debugPrint('PrinterBridge: Setting Zebra dimensions to ${widthInches}" x ${heightInches}" ($widthInDots x $heightInDots dots @ ${effectiveDpi}dpi)');
+      
+      // Set print width via SGD parameter
+      await ZebraPrinter.setSgdParameter('ezpl.print_width', widthInDots.toString());
+      
+      // Set label length via both methods for maximum compatibility
+      await ZebraPrinter.setLabelLength(heightInDots);
+      await ZebraPrinter.setSgdParameter('ezpl.label_length_max', heightInches.toString());
+      
+      // Clear cached dimensions to force refresh
+      _cachedZebraDimensions = null;
+      debugPrint('PrinterBridge: Zebra dimensions set successfully');
+      
+      return true;
+    } catch (e) {
+      debugPrint('PrinterBridge: Failed to set Zebra dimensions: $e');
+      return false;
+    }
+  }
+
+  /// Clear cached Zebra dimensions (useful after printer reconnection)
+  static void clearZebraDimensionCache() {
+    _cachedZebraDimensions = null;
+    debugPrint('PrinterBridge: Zebra dimension cache cleared');
+  }
+
+  /// Generate ZPL commands for Zebra receipt printing
+  /// This allows generating ZPL separately from printing for caching/reuse
+  static String generateZebraReceiptZPL(
+    int width,
+    int height,
+    int dpi,
+    PrinterReceiptData receiptData,
+  ) {
+    return _generateZebraReceiptZPL(width, height, dpi, receiptData);
+  }
+
+  /// Generate ZPL commands for Zebra label printing
+  /// This allows generating ZPL separately from printing for caching/reuse
+  static String generateZebraLabelZPL(
+    int width,
+    int height,
+    int dpi,
+    PrinterLabelData labelData,
+  ) {
+    return _generateZebraLabelZPL(width, height, dpi, labelData);
+  }
+
   static Future<bool> _connectStarPrinter(
     String interface,
     String connectionString,
@@ -526,6 +637,9 @@ class PrinterBridge {
       await ZebraPrinter.connect(settings);
       debugPrint('Zebra connection successful');
 
+      // Clear cached dimensions to ensure fresh data after new connection
+      clearZebraDimensionCache();
+
       // Add small delay to ensure connection is fully established
       await Future.delayed(const Duration(milliseconds: 500));
 
@@ -568,17 +682,19 @@ class PrinterBridge {
 
   /// Print a receipt using the connected printer of the specified brand
   /// Returns true if print successful
+  /// For Zebra printers, dimensions parameter (width, height, dpi) is recommended to avoid internal API calls
   static Future<bool> printReceipt(
     String brand,
-    PrinterReceiptData receiptData,
-  ) async {
+    PrinterReceiptData receiptData, {
+    Map<String, int>? dimensions,
+  }) async {
     switch (brand.toLowerCase()) {
       case 'epson':
         return _printEpsonReceipt(receiptData);
       case 'star':
         return _printStarReceipt(receiptData);
       case 'zebra':
-        return _printZebraReceipt(receiptData);
+        return _printZebraReceipt(receiptData, dimensions);
       default:
         throw ArgumentError('Unsupported brand: $brand');
     }
@@ -950,17 +1066,19 @@ class PrinterBridge {
 
   /// Print a label using the connected printer of the specified brand
   /// Returns true if print successful
+  /// For Zebra printers, dimensions parameter (width, height, dpi) is recommended to avoid internal API calls
   static Future<bool> printLabel(
     String brand,
-    PrinterLabelData labelData,
-  ) async {
+    PrinterLabelData labelData, {
+    Map<String, int>? dimensions,
+  }) async {
     switch (brand.toLowerCase()) {
       case 'epson':
         return await _printEpsonLabel(labelData);
       case 'star':
         return await _printStarLabel(labelData);
       case 'zebra':
-        return await _printZebraLabel(labelData);
+        return await _printZebraLabel(labelData, dimensions);
       default:
         throw ArgumentError('Unsupported printer brand: $brand');
     }
@@ -1080,85 +1198,29 @@ class PrinterBridge {
     return commands;
   }
 
-  static Future<bool> _printZebraLabel(PrinterLabelData labelData) async {
+  static Future<bool> _printZebraLabel(PrinterLabelData labelData, [Map<String, int>? dimensions]) async {
     try {
-      // Get actual printer dimensions
-      Map<String, dynamic> dimensions;
-      try {
-        debugPrint('Fetching Zebra printer dimensions for label...');
-        dimensions = await ZebraPrinter.getPrinterDimensions();
-        debugPrint('Raw dimensions received: $dimensions');
-      } catch (e) {
-        debugPrint('Failed to get dimensions, using defaults: $e');
-        dimensions = {
-          'printWidthInDots': 386, // ZD410 default
-          'labelLengthInDots': 212, // common label height
-          'dpi': 203, // standard Zebra DPI
-        };
+      // Use provided dimensions or fall back to cached/fresh dimensions
+      Map<String, int>? effectiveDimensions = dimensions;
+      if (effectiveDimensions == null) {
+        debugPrint('PrinterBridge: No dimensions provided, fetching from cache/API...');
+        effectiveDimensions = await getZebraDimensions();
       }
+      
+      final width = effectiveDimensions?['printWidthInDots'] ?? 386;
+      final height = effectiveDimensions?['labelLengthInDots'] ?? 212;
+      final dpi = effectiveDimensions?['dpi'] ?? 203;
 
-      final width = dimensions['printWidthInDots'] ?? 386;
-      final height = dimensions['labelLengthInDots'] ?? 212;
-      final dpi = dimensions['dpi'] ?? 203;
-
-      // Validate dimensions and retry if needed
-      if (width < 100 || height < 100) {
-        debugPrint('Dimensions seem invalid, retrying...');
-        await Future.delayed(const Duration(milliseconds: 300));
-        try {
-          final retryDimensions = await ZebraPrinter.getPrinterDimensions();
-          debugPrint('Retry dimensions: $retryDimensions');
-          final retryWidth = retryDimensions['printWidthInDots'] ?? 386;
-          final retryHeight = retryDimensions['labelLengthInDots'] ?? 212;
-          final retryDpi = retryDimensions['dpi'] ?? 203;
-
-          debugPrint(
-            'Using Zebra label dimensions (retry): ${retryWidth}x${retryHeight} @ ${retryDpi}dpi',
-          );
-          final labelZpl = _generateZebraLabelZPL(
-            retryWidth,
-            retryHeight,
-            retryDpi,
-            labelData,
-          );
-
-          // Print labels based on quantity
-          for (int i = 0; i < labelData.quantity; i++) {
-            await ZebraPrinter.sendCommands(
-              labelZpl,
-              language: ZebraPrintLanguage.zpl,
-            );
-            if (i < labelData.quantity - 1) {
-              await Future.delayed(const Duration(milliseconds: 100));
-            }
-          }
-        } catch (retryError) {
-          debugPrint('Retry failed, using defaults: $retryError');
-          // Fallback to defaults
-          final labelZpl = _generateZebraLabelZPL(386, 212, 203, labelData);
-          for (int i = 0; i < labelData.quantity; i++) {
-            await ZebraPrinter.sendCommands(
-              labelZpl,
-              language: ZebraPrintLanguage.zpl,
-            );
-            if (i < labelData.quantity - 1) {
-              await Future.delayed(const Duration(milliseconds: 100));
-            }
-          }
-        }
-      } else {
-        debugPrint('Using Zebra label dimensions: ${width}x${height} @ ${dpi}dpi');
-        final labelZpl = _generateZebraLabelZPL(width, height, dpi, labelData);
-
-        // Print labels based on quantity
-        for (int i = 0; i < labelData.quantity; i++) {
-          await ZebraPrinter.sendCommands(
-            labelZpl,
-            language: ZebraPrintLanguage.zpl,
-          );
-          if (i < labelData.quantity - 1) {
-            await Future.delayed(const Duration(milliseconds: 100));
-          }
+      debugPrint('PrinterBridge: Using Zebra label dimensions: ${width}x${height} @ ${dpi}dpi');
+      
+      // Generate ZPL once for all labels
+      final labelZpl = _generateZebraLabelZPL(width, height, dpi, labelData);
+      
+      // Print all labels with the same ZPL
+      for (int i = 0; i < labelData.quantity; i++) {
+        await ZebraPrinter.sendCommands(labelZpl, language: ZebraPrintLanguage.zpl);
+        if (i < labelData.quantity - 1) {
+          await Future.delayed(const Duration(milliseconds: 100));
         }
       }
 
@@ -1365,80 +1427,24 @@ class PrinterBridge {
     }
   }
 
-  static Future<bool> _printZebraReceipt(PrinterReceiptData receiptData) async {
+  static Future<bool> _printZebraReceipt(PrinterReceiptData receiptData, [Map<String, int>? dimensions]) async {
     try {
-      // Get actual printer dimensions
-      Map<String, dynamic> dimensions;
-      try {
-        debugPrint('Fetching Zebra printer dimensions for receipt...');
-        dimensions = await ZebraPrinter.getPrinterDimensions();
-        debugPrint('Raw dimensions received: $dimensions');
-      } catch (e) {
-        debugPrint('Failed to get dimensions, using defaults: $e');
-        dimensions = {
-          'printWidthInDots': 386, // ZD410 default
-          'labelLengthInDots': 600, // longer for receipts
-          'dpi': 203, // standard Zebra DPI
-        };
+      // Use provided dimensions or fall back to cached/fresh dimensions
+      Map<String, int>? effectiveDimensions = dimensions;
+      if (effectiveDimensions == null) {
+        debugPrint('PrinterBridge: No dimensions provided, fetching from cache/API...');
+        effectiveDimensions = await getZebraDimensions();
       }
+      
+      final width = effectiveDimensions?['printWidthInDots'] ?? 386;
+      final height = effectiveDimensions?['labelLengthInDots'] ?? 600; // Use larger default for receipts
+      final dpi = effectiveDimensions?['dpi'] ?? 203;
 
-      final width = dimensions['printWidthInDots'] ?? 386;
-      final height =
-          dimensions['labelLengthInDots'] ??
-          600; // Use larger default for receipts
-      final dpi = dimensions['dpi'] ?? 203;
-
-      // Validate dimensions and retry if needed
-      if (width < 100 || height < 100) {
-        debugPrint('Dimensions seem invalid, retrying...');
-        await Future.delayed(const Duration(milliseconds: 300));
-        try {
-          final retryDimensions = await ZebraPrinter.getPrinterDimensions();
-          debugPrint('Retry dimensions: $retryDimensions');
-          final retryWidth = retryDimensions['printWidthInDots'] ?? 386;
-          final retryHeight = retryDimensions['labelLengthInDots'] ?? 600;
-          final retryDpi = retryDimensions['dpi'] ?? 203;
-
-          debugPrint(
-            'Using Zebra receipt dimensions (retry): ${retryWidth}x${retryHeight} @ ${retryDpi}dpi',
-          );
-          final receiptZpl = _generateZebraReceiptZPL(
-            retryWidth,
-            retryHeight,
-            retryDpi,
-            receiptData,
-          );
-          await ZebraPrinter.sendCommands(
-            receiptZpl,
-            language: ZebraPrintLanguage.zpl,
-          );
-        } catch (retryError) {
-          debugPrint('Retry failed, using defaults: $retryError');
-          // Fallback to defaults
-          final receiptZpl = _generateZebraReceiptZPL(
-            386,
-            600,
-            203,
-            receiptData,
-          );
-          await ZebraPrinter.sendCommands(
-            receiptZpl,
-            language: ZebraPrintLanguage.zpl,
-          );
-        }
-      } else {
-        debugPrint('Using Zebra receipt dimensions: ${width}x${height} @ ${dpi}dpi');
-        final receiptZpl = _generateZebraReceiptZPL(
-          width,
-          height,
-          dpi,
-          receiptData,
-        );
-        await ZebraPrinter.sendCommands(
-          receiptZpl,
-          language: ZebraPrintLanguage.zpl,
-        );
-      }
+      debugPrint('PrinterBridge: Using Zebra receipt dimensions: ${width}x${height} @ ${dpi}dpi');
+      
+      // Generate and send ZPL
+      final receiptZpl = _generateZebraReceiptZPL(width, height, dpi, receiptData);
+      await ZebraPrinter.sendCommands(receiptZpl, language: ZebraPrintLanguage.zpl);
 
       return true;
     } catch (e) {
