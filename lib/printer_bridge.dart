@@ -370,6 +370,24 @@ class PrinterBridge {
     }
   }
 
+  /// Detect paper width for Epson printers
+  /// Returns detected width string (e.g., '58mm', '80mm') or null if detection fails
+  static Future<String?> detectPaperWidth(String brand) async {
+    if (brand.toLowerCase() != 'epson') {
+      debugPrint('Paper width detection only supported for Epson printers');
+      return null;
+    }
+
+    try {
+      String detectedWidth = await EpsonPrinter.detectPaperWidth();
+      debugPrint('PrinterBridge: Detected paper width: $detectedWidth');
+      return detectedWidth;
+    } catch (e) {
+      debugPrint('PrinterBridge: Paper width detection failed: $e');
+      return null;
+    }
+  }
+
   static Future<bool> _connectStarPrinter(
     String interface,
     String connectionString,

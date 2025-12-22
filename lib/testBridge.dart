@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:zebra_printer/zebra_printer.dart';
-
+import 'package:flutter/foundation.dart';
 import 'printer_bridge.dart';
 
 void main() {
@@ -124,7 +124,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   _zebraDiscoveredPrinters = [];
                   _selectedZebraPrinter = null;
                 });
-                print('DEBUG: Brand switched to ${newValue?.displayName ?? "None"}');
+                debugPrint('DEBUG: Brand switched to ${newValue?.displayName ?? "None"}');
               },
             ),
             if (_selectedBrand != null) ...[
@@ -194,6 +194,12 @@ class _MyHomePageState extends State<MyHomePage> {
                   icon: const Icon(Icons.link_off),
                   label: const Text('Disconnect'),
                 ),
+                if (_isConnected && _selectedBrand == PrinterBrand.epson)
+                  ElevatedButton.icon(
+                    onPressed: _testPaperWidthDetection,
+                    icon: const Icon(Icons.straighten),
+                    label: const Text('Test Paper Width'),
+                  ),
               ],
             ),
             
@@ -225,7 +231,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                  p.interfaceType.toLowerCase() == newValue['interface']?.toLowerCase(),
                         );
                       } catch (e) {
-                        print('Could not find matching Zebra printer: $e');
+                        debugPrint('Could not find matching Zebra printer: $e');
                       }
                     }
                   });
@@ -361,12 +367,12 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() => _isDiscovering = true);
     
     try {
-      print('🔍 Testing PrinterBridge.discover(${_selectedBrand!.name})...');
+      debugPrint('🔍 Testing PrinterBridge.discover(${_selectedBrand!.name})...');
       final results = await PrinterBridge.discover(_selectedBrand!.name);
       
-      print('✅ Discovery successful: Found ${results.length} printers');
+      debugPrint('✅ Discovery successful: Found ${results.length} printers');
       for (int i = 0; i < results.length; i++) {
-        print('  [$i] ${results[i]}');
+        debugPrint('  [$i] ${results[i]}');
       }
       
       // Store both universal and brand-specific lists
@@ -387,7 +393,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       
     } catch (e) {
-      print('❌ Discovery failed: $e');
+      debugPrint('❌ Discovery failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Discovery failed: $e')),
@@ -409,7 +415,7 @@ class _MyHomePageState extends State<MyHomePage> {
         final networkPrinters = await ZebraPrinter.discoverNetworkPrintersAuto();
         _zebraDiscoveredPrinters.addAll(networkPrinters);
       } catch (e) {
-        print('Network discovery failed: $e');
+        debugPrint('Network discovery failed: $e');
       }
       
       // Bluetooth discovery
@@ -417,7 +423,7 @@ class _MyHomePageState extends State<MyHomePage> {
         final bluetoothPrinters = await ZebraPrinter.discoverBluetoothPrinters();
         _zebraDiscoveredPrinters.addAll(bluetoothPrinters);
       } catch (e) {
-        print('Bluetooth discovery failed: $e');
+        debugPrint('Bluetooth discovery failed: $e');
       }
       
       // USB discovery (Android only)
@@ -426,7 +432,7 @@ class _MyHomePageState extends State<MyHomePage> {
           final usbPrinters = await ZebraPrinter.discoverUsbPrinters();
           _zebraDiscoveredPrinters.addAll(usbPrinters);
         } catch (e) {
-          print('USB discovery failed: $e');
+          debugPrint('USB discovery failed: $e');
         }
       }
       
@@ -438,11 +444,11 @@ class _MyHomePageState extends State<MyHomePage> {
                    p.interfaceType.toLowerCase() == _selectedPrinter!['interface']?.toLowerCase(),
           );
         } catch (e) {
-          print('Could not match Zebra printer: $e');
+          debugPrint('Could not match Zebra printer: $e');
         }
       }
     } catch (e) {
-      print('Failed to populate Zebra printers: $e');
+      debugPrint('Failed to populate Zebra printers: $e');
     }
   }
 
@@ -454,7 +460,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (_selectedPrinter == null || _selectedBrand == null) return;
     
     try {
-      print('🔗 Testing PrinterBridge.connect...');
+      debugPrint('🔗 Testing PrinterBridge.connect...');
       final success = await PrinterBridge.connect(
         _selectedPrinter!['brand']!,
         _selectedPrinter!['interface']!,
@@ -466,7 +472,28 @@ class _MyHomePageState extends State<MyHomePage> {
         _printerStatus = success ? 'Connected' : 'Connection Failed';
       });
       
-      print(success ? '✅ Connection successful' : '❌ Connection failed');
+      debugPrint(success ? '✅ Connection successful' : '❌ Connection failed');
+      
+      if (success && _selectedBrand == PrinterBrand.epson) {
+        // Try to detect paper width after successful Epson connection
+        try {
+          final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
+          if (detectedWidth != null && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Connected! Detected paper width: $detectedWidth'),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+            debugPrint('📏 Auto-detected paper width: $detectedWidth');
+            return; // Skip the generic success message
+          }
+        } catch (e) {
+          debugPrint('📏 Auto paper width detection failed: $e');
+          // Continue to show generic success message
+        }
+      }
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -477,7 +504,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       
     } catch (e) {
-      print('❌ Connection error: $e');
+      debugPrint('❌ Connection error: $e');
       setState(() {
         _isConnected = false;
         _printerStatus = 'Error: $e';
@@ -495,23 +522,82 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _disconnectFromPrinter() async {
-    // Note: PrinterBridge doesn't have disconnect yet, so we'll just update state
-    setState(() {
-      _isConnected = false;
-      _printerStatus = 'Disconnected';
-    });
+    if (_selectedBrand == null) return;
     
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Disconnected')),
-    );
+    try {
+      final success = await PrinterBridge.disconnect(_selectedBrand!.name);
+      setState(() {
+        _isConnected = false;
+        _printerStatus = success ? 'Disconnected' : 'Disconnect Failed';
+      });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? 'Disconnected successfully' : 'Disconnect failed'),
+          backgroundColor: success ? Colors.green : Colors.orange,
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _isConnected = false;
+        _printerStatus = 'Disconnected';
+      });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Disconnect error: $e')),
+      );
+    }
+  }
+
+  Future<void> _testPaperWidthDetection() async {
+    if (!_isConnected || _selectedBrand == null) return;
+    
+    try {
+      debugPrint('📏 Testing PrinterBridge.detectPaperWidth...');
+      
+      final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
+      
+      if (detectedWidth != null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Detected paper width: $detectedWidth'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        debugPrint('✅ Paper width detection successful: $detectedWidth');
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Paper width detection failed or not supported'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        debugPrint('⚠️ Paper width detection failed');
+      }
+    } catch (e) {
+      debugPrint('❌ Paper width detection error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Paper width detection error: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Future<void> _testReceiptPrinting() async {
     if (!_isConnected || _selectedPrinter == null) return;
     
     try {
-      print('🧾 Testing PrinterBridge.printReceipt...');
+      debugPrint('🧾 Testing PrinterBridge.printReceipt...');
       
       final receiptData = PrinterReceiptData(
         storeName: 'Bridge Test Store',
@@ -541,7 +627,7 @@ class _MyHomePageState extends State<MyHomePage> {
       
       final success = await PrinterBridge.printReceipt(_selectedPrinter!['brand']!, receiptData);
       
-      print(success ? '✅ Receipt print successful' : '❌ Receipt print failed');
+      debugPrint(success ? '✅ Receipt print successful' : '❌ Receipt print failed');
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -552,7 +638,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       
     } catch (e) {
-      print('❌ Receipt print error: $e');
+      debugPrint('❌ Receipt print error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Receipt print error: $e')),
@@ -564,7 +650,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (!_isConnected || _selectedPrinter == null) return;
     
     try {
-      print('Testing PrinterBridge.printLabel...');
+      debugPrint('Testing PrinterBridge.printLabel...');
       
       final labelData = PrinterLabelData(
         productName: 'T-Shirt',
@@ -576,7 +662,7 @@ class _MyHomePageState extends State<MyHomePage> {
       
       final success = await PrinterBridge.printLabel(_selectedPrinter!['brand']!, labelData);
       
-      print(success ? '✅ Label print successful' : '❌ Label print failed');
+      debugPrint(success ? '✅ Label print successful' : '❌ Label print failed');
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -587,7 +673,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       
     } catch (e) {
-      print('❌ Label print error: $e');
+      debugPrint('❌ Label print error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Label print error: $e')),
@@ -609,7 +695,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _testZebraReceiptPrint() async {
-    print('🧾 Testing Zebra receipt on ${_selectedZebraPrinter?.friendlyName ?? "unknown model"}...');
+    debugPrint('🧾 Testing Zebra receipt on ${_selectedZebraPrinter?.friendlyName ?? "unknown model"}...');
     
     // Create receipt-optimized data for ZD421
     final receiptData = PrinterReceiptData(
@@ -632,7 +718,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _testZebraLabelPrint() async {
-    print('🏷️ Testing Zebra label on ${_selectedZebraPrinter?.friendlyName ?? "unknown model"}...');
+    debugPrint('🏷️ Testing Zebra label on ${_selectedZebraPrinter?.friendlyName ?? "unknown model"}...');
     
     // Create label-optimized data for ZD410
     final labelData = PrinterLabelData(
@@ -650,7 +736,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       final success = await PrinterBridge.printReceipt(_selectedPrinter!['brand']!, receiptData);
       
-      print(success ? '✅ Model-specific receipt print successful' : '❌ Model-specific receipt print failed');
+      debugPrint(success ? '✅ Model-specific receipt print successful' : '❌ Model-specific receipt print failed');
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -660,7 +746,7 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       );
     } catch (e) {
-      print('❌ Model-specific receipt error: $e');
+      debugPrint('❌ Model-specific receipt error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Model-optimized receipt error: $e')),
@@ -672,7 +758,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       final success = await PrinterBridge.printLabel(_selectedPrinter!['brand']!, labelData);
       
-      print(success ? '✅ Model-specific label print successful' : '❌ Model-specific label print failed');
+      debugPrint(success ? '✅ Model-specific label print successful' : '❌ Model-specific label print failed');
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -682,7 +768,7 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       );
     } catch (e) {
-      print('❌ Model-specific label error: $e');
+      debugPrint('❌ Model-specific label error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Model-optimized label error: $e')),
