@@ -52,9 +52,18 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _isDiscovering = false;
   String _printerStatus = 'Unknown';
 
+  // Epson paper width configuration  
+  String _epsonPaperWidth = 'Unknown';
+
   // Zebra-specific fields for direct access
   List<DiscoveredPrinter> _zebraDiscoveredPrinters = [];
   DiscoveredPrinter? _selectedZebraPrinter;
+
+  @override
+  void initState() {
+    super.initState();
+    _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -265,6 +274,42 @@ class _MyHomePageState extends State<MyHomePage> {
                 ],
               ),
             ),
+            
+            // Epson paper width configuration
+            if (_selectedBrand == PrinterBrand.epson) ...[
+              const SizedBox(height: 16),
+              const Text('Epson Paper Width Configuration:', 
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: _epsonPaperWidth,
+                decoration: const InputDecoration(
+                  labelText: 'Paper Width',
+                  border: OutlineInputBorder(),
+                  helperText: 'Auto-detected on connection or set manually',
+                ),
+                items: EpsonConfig.availablePaperWidths.map((width) {
+                  return DropdownMenuItem(
+                    value: width,
+                    child: Text(width),
+                  );
+                }).toList(),
+                onChanged: (String? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _epsonPaperWidth = newValue;
+                      PrinterBridge.epsonConfig.setPaperWidth(newValue);
+                    });
+                    debugPrint('📏 Paper width manually set to: $newValue');
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Characters per line: ${PrinterBridge.epsonConfig.charactersPerLine}',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            ],
           ],
         ),
       ),
@@ -479,6 +524,11 @@ class _MyHomePageState extends State<MyHomePage> {
         try {
           final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
           if (detectedWidth != null && mounted) {
+            // Update UI state to reflect the auto-updated config
+            setState(() {
+              _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+            });
+            
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Connected! Detected paper width: $detectedWidth'),
@@ -560,10 +610,15 @@ class _MyHomePageState extends State<MyHomePage> {
       final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
       
       if (detectedWidth != null) {
+        // Update UI state to reflect the auto-updated config
+        setState(() {
+          _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+        });
+        
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Detected paper width: $detectedWidth'),
+            content: Text('Detected and set paper width: $detectedWidth'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
           ),

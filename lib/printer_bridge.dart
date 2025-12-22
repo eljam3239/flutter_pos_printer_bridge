@@ -5,6 +5,37 @@ import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
 
+/// Epson printer configuration
+class EpsonConfig {
+  String _paperWidth = '80mm'; // Default to 80mm for Epson
+  static const List<String> availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
+
+  /// Get current Epson paper width setting
+  String get paperWidth => _paperWidth;
+
+  /// Set Epson paper width (must be one of the available widths)
+  void setPaperWidth(String width) {
+    if (availablePaperWidths.contains(width)) {
+      _paperWidth = width;
+      debugPrint('PrinterBridge: Epson paper width set to $width');
+    } else {
+      debugPrint('PrinterBridge: Invalid paper width $width. Available: $availablePaperWidths');
+    }
+  }
+
+  /// Get characters per line based on current paper width
+  int get charactersPerLine {
+    switch (_paperWidth) {
+      case '58mm': return 35; // 58mm - more conservative to match real 58mm behavior
+      case '60mm': return 34; // 60mm typically 34 chars  
+      case '70mm': return 42; // 70mm typically 42 chars
+      case '76mm': return 45; // 76mm typically 45 chars
+      case '80mm': return 48; // 80mm typically 48 chars
+      default: return 48; // Fallback to 80mm
+    }
+  }
+}
+
 /// Universal line item class for receipts
 class PrinterLineItem {
   final String itemName;
@@ -74,6 +105,9 @@ class PrinterLabelData {
 }
 
 class PrinterBridge {
+  /// Epson printer configuration
+  static final EpsonConfig epsonConfig = EpsonConfig();
+
   /// Discover printers for a specific brand
   /// Returns list of discovered printers with their connection details
   static Future<List<Map<String, String>>> discover(String brand) async {
@@ -372,6 +406,7 @@ class PrinterBridge {
 
   /// Detect paper width for Epson printers
   /// Returns detected width string (e.g., '58mm', '80mm') or null if detection fails
+  /// Also automatically updates EpsonConfig.paperWidth if detection succeeds
   static Future<String?> detectPaperWidth(String brand) async {
     if (brand.toLowerCase() != 'epson') {
       debugPrint('Paper width detection only supported for Epson printers');
@@ -381,6 +416,13 @@ class PrinterBridge {
     try {
       String detectedWidth = await EpsonPrinter.detectPaperWidth();
       debugPrint('PrinterBridge: Detected paper width: $detectedWidth');
+      
+      // Auto-update the EpsonConfig if detected width is valid
+      if (EpsonConfig.availablePaperWidths.contains(detectedWidth)) {
+        PrinterBridge.epsonConfig.setPaperWidth(detectedWidth);
+        debugPrint('PrinterBridge: Auto-updated paper width setting to $detectedWidth');
+      }
+      
       return detectedWidth;
     } catch (e) {
       debugPrint('PrinterBridge: Paper width detection failed: $e');
@@ -583,7 +625,7 @@ class PrinterBridge {
     final List<EpsonPrintCommand> cmds = [];
 
     // Calculate the correct characters per line based on detected paper width
-    int effectiveCharsPerLine = 48; // Default to 80mm width
+    final effectiveCharsPerLine = PrinterBridge.epsonConfig.charactersPerLine;
 
     // Helper functions that use the correct character width
     String horizontalLine() => '-' * effectiveCharsPerLine;
