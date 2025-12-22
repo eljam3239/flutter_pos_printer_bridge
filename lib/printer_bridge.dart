@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
@@ -105,7 +106,7 @@ class PrinterBridge {
       final lanPrinters = await EpsonPrinter.discoverPrinters();
       allPrinters.addAll(lanPrinters);
     } catch (e) {
-      print('Epson LAN discovery error: $e');
+      debugPrint('Epson LAN discovery error: $e');
     }
 
     // Small delay between discoveries
@@ -118,7 +119,7 @@ class PrinterBridge {
       final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
       allPrinters.addAll(btPrinters);
     } catch (e) {
-      print('Epson Bluetooth discovery error: $e');
+      debugPrint('Epson Bluetooth discovery error: $e');
     }
 
     // Small delay before USB
@@ -129,7 +130,7 @@ class PrinterBridge {
       final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
       allPrinters.addAll(usbPrinters);
     } catch (e) {
-      print('Epson USB discovery error: $e');
+      debugPrint('Epson USB discovery error: $e');
     }
 
     // Convert to hybrid format
@@ -138,14 +139,14 @@ class PrinterBridge {
 
   static Future<List<Map<String, String>>> _discoverStarPrinters() async {
     try {
-      print('Discovering Star printers...');
+      debugPrint('Discovering Star printers...');
       final printers = await star.StarPrinter.discoverPrinters();
-      print('Star discovery found ${printers.length} printers');
+      debugPrint('Star discovery found ${printers.length} printers');
       
       // Convert to hybrid format
       return printers.map((raw) => _parseStarPrinter(raw)).toList();
     } catch (e) {
-      print('Star discovery error: $e');
+      debugPrint('Star discovery error: $e');
       // Return empty list on error rather than throwing
       return [];
     }
@@ -242,11 +243,11 @@ class PrinterBridge {
         final networkPrinters =
             await ZebraPrinter.discoverNetworkPrintersAuto();
         allPrinters.addAll(networkPrinters);
-        print(
+        debugPrint(
           'Zebra network discovery found ${networkPrinters.length} printers',
         );
       } catch (e) {
-        print('Zebra network discovery failed: $e');
+        debugPrint('Zebra network discovery failed: $e');
       }
 
       // Bluetooth discovery (works on all platforms)
@@ -254,11 +255,11 @@ class PrinterBridge {
         final bluetoothPrinters =
             await ZebraPrinter.discoverBluetoothPrinters();
         allPrinters.addAll(bluetoothPrinters);
-        print(
+        debugPrint(
           'Zebra Bluetooth discovery found ${bluetoothPrinters.length} printers',
         );
       } catch (e) {
-        print('Zebra Bluetooth discovery failed: $e');
+        debugPrint('Zebra Bluetooth discovery failed: $e');
       }
 
       // USB discovery (Android only)
@@ -266,13 +267,13 @@ class PrinterBridge {
         try {
           final usbPrinters = await ZebraPrinter.discoverUsbPrinters();
           allPrinters.addAll(usbPrinters);
-          print('Zebra USB discovery found ${usbPrinters.length} printers');
+          debugPrint('Zebra USB discovery found ${usbPrinters.length} printers');
         } catch (e) {
-          print('Zebra USB discovery failed: $e');
+          debugPrint('Zebra USB discovery failed: $e');
         }
       }
     } catch (e) {
-      print('Zebra discovery failed: $e');
+      debugPrint('Zebra discovery failed: $e');
       rethrow;
     }
 
@@ -364,7 +365,7 @@ class PrinterBridge {
       await EpsonPrinter.connect(settings);
       return true;
     } catch (e) {
-      print('Epson connection failed: $e');
+      debugPrint('Epson connection failed: $e');
       return false;
     }
   }
@@ -412,7 +413,7 @@ class PrinterBridge {
           break;
       }
       
-      print('PrinterBridge: Connecting to Star $interfaceType printer: $identifier');
+      debugPrint('PrinterBridge: Connecting to Star $interfaceType printer: $identifier');
       
       final settings = star.StarConnectionSettings(
         interfaceType: interfaceType,
@@ -420,11 +421,11 @@ class PrinterBridge {
       );
       
       await star.StarPrinter.connect(settings);
-      print('PrinterBridge: Star connection successful');
+      debugPrint('PrinterBridge: Star connection successful');
       
       return true;
     } catch (e) {
-      print('PrinterBridge: Star connection failed: $e');
+      debugPrint('PrinterBridge: Star connection failed: $e');
       return false;
     }
   }
@@ -459,18 +460,18 @@ class PrinterBridge {
         timeout: 15000,
       );
 
-      print(
+      debugPrint(
         'Connecting to Zebra printer: $connectionString via ${interface.toUpperCase()}',
       );
       await ZebraPrinter.connect(settings);
-      print('Zebra connection successful');
+      debugPrint('Zebra connection successful');
 
       // Add small delay to ensure connection is fully established
       await Future.delayed(const Duration(milliseconds: 500));
 
       return true;
     } catch (e) {
-      print('Zebra connection failed: $e');
+      debugPrint('Zebra connection failed: $e');
       return false;
     }
   }
@@ -480,7 +481,7 @@ class PrinterBridge {
       await EpsonPrinter.disconnect();
       return true;
     } catch (e) {
-      print('Epson disconnect failed: $e');
+      debugPrint('Epson disconnect failed: $e');
       return false;
     }
   }
@@ -490,7 +491,7 @@ class PrinterBridge {
       await star.StarPrinter.disconnect();
       return true;
     } catch (e) {
-      print('Star disconnect failed: $e');
+      debugPrint('Star disconnect failed: $e');
       return false;
     }
   }
@@ -500,7 +501,7 @@ class PrinterBridge {
       await ZebraPrinter.disconnect();
       return true;
     } catch (e) {
-      print('Zebra disconnect failed: $e');
+      debugPrint('Zebra disconnect failed: $e');
       return false;
     }
   }
@@ -544,7 +545,7 @@ class PrinterBridge {
       final commands = _buildEpsonReceiptCommands(receiptData);
 
       if (commands.isEmpty) {
-        print('Epson receipt has no content');
+        debugPrint('Epson receipt has no content');
         return false;
       }
 
@@ -553,7 +554,7 @@ class PrinterBridge {
 
       return true;
     } catch (e) {
-      print('Epson receipt print failed: $e');
+      debugPrint('Epson receipt print failed: $e');
       return false;
     }
   }
@@ -922,7 +923,7 @@ class PrinterBridge {
 
       return true;
     } catch (e) {
-      print('Epson label print failed: $e');
+      debugPrint('Epson label print failed: $e');
       return false;
     }
   }
@@ -1024,11 +1025,11 @@ class PrinterBridge {
       // Get actual printer dimensions
       Map<String, dynamic> dimensions;
       try {
-        print('Fetching Zebra printer dimensions for label...');
+        debugPrint('Fetching Zebra printer dimensions for label...');
         dimensions = await ZebraPrinter.getPrinterDimensions();
-        print('Raw dimensions received: $dimensions');
+        debugPrint('Raw dimensions received: $dimensions');
       } catch (e) {
-        print('Failed to get dimensions, using defaults: $e');
+        debugPrint('Failed to get dimensions, using defaults: $e');
         dimensions = {
           'printWidthInDots': 386, // ZD410 default
           'labelLengthInDots': 212, // common label height
@@ -1042,16 +1043,16 @@ class PrinterBridge {
 
       // Validate dimensions and retry if needed
       if (width < 100 || height < 100) {
-        print('Dimensions seem invalid, retrying...');
+        debugPrint('Dimensions seem invalid, retrying...');
         await Future.delayed(const Duration(milliseconds: 300));
         try {
           final retryDimensions = await ZebraPrinter.getPrinterDimensions();
-          print('Retry dimensions: $retryDimensions');
+          debugPrint('Retry dimensions: $retryDimensions');
           final retryWidth = retryDimensions['printWidthInDots'] ?? 386;
           final retryHeight = retryDimensions['labelLengthInDots'] ?? 212;
           final retryDpi = retryDimensions['dpi'] ?? 203;
 
-          print(
+          debugPrint(
             'Using Zebra label dimensions (retry): ${retryWidth}x${retryHeight} @ ${retryDpi}dpi',
           );
           final labelZpl = _generateZebraLabelZPL(
@@ -1072,7 +1073,7 @@ class PrinterBridge {
             }
           }
         } catch (retryError) {
-          print('Retry failed, using defaults: $retryError');
+          debugPrint('Retry failed, using defaults: $retryError');
           // Fallback to defaults
           final labelZpl = _generateZebraLabelZPL(386, 212, 203, labelData);
           for (int i = 0; i < labelData.quantity; i++) {
@@ -1086,7 +1087,7 @@ class PrinterBridge {
           }
         }
       } else {
-        print('Using Zebra label dimensions: ${width}x${height} @ ${dpi}dpi');
+        debugPrint('Using Zebra label dimensions: ${width}x${height} @ ${dpi}dpi');
         final labelZpl = _generateZebraLabelZPL(width, height, dpi, labelData);
 
         // Print labels based on quantity
@@ -1103,7 +1104,7 @@ class PrinterBridge {
 
       return true;
     } catch (e) {
-      print('Zebra label print failed: $e');
+      debugPrint('Zebra label print failed: $e');
       return false;
     }
   }
@@ -1117,7 +1118,7 @@ class PrinterBridge {
       // Paper width mapping: 38mm->34.5mm, 58mm->48mm, 80mm->72mm
       // For now, we'll use the 58mm default but this could be configurable
       
-      print('Star receipt - using printableAreaMm: $printableAreaMm');
+      debugPrint('Star receipt - using printableAreaMm: $printableAreaMm');
       
       // Build structured layout settings to be interpreted by native layers
       // This follows the same pattern as main.dart _printStarReceipt()
@@ -1161,20 +1162,20 @@ class PrinterBridge {
         settings: layoutSettings,
       );
       
-      print('Sending Star receipt to printer...');
+      debugPrint('Sending Star receipt to printer...');
       await star.StarPrinter.printReceipt(printJob);
       
-      print('Star receipt completed successfully');
+      debugPrint('Star receipt completed successfully');
       return true;
     } catch (e) {
-      print('Star receipt print failed: $e');
+      debugPrint('Star receipt print failed: $e');
       return false;
     }
   }
 
   static Future<bool> _printStarLabel(PrinterLabelData labelData) async {
     try {
-      print('Star label print - Creating label print job for ${labelData.quantity} label(s)...');
+      debugPrint('Star label print - Creating label print job for ${labelData.quantity} label(s)...');
       
       // Calculate printable area based on paper width (default to 58mm)
       // 38mm -> 34.5mm printable, 58mm -> 48mm printable, 80mm -> 72mm printable
@@ -1185,7 +1186,7 @@ class PrinterBridge {
       // Note: In a full implementation, you might want to make paper width configurable
       // For now, we'll use the same default as the receipt printing (58mm)
       
-      print('Star label - using printableAreaMm: $printableAreaMm, layoutType: $layoutType');
+      debugPrint('Star label - using printableAreaMm: $printableAreaMm, layoutType: $layoutType');
       
       // Extract label content from PrinterLabelData
       final productName = labelData.productName.isNotEmpty ? labelData.productName : 'PRODUCT NAME';
@@ -1240,7 +1241,7 @@ class PrinterBridge {
       
       // Print multiple labels with the same logic as main.dart
       for (int i = 0; i < labelData.quantity; i++) {
-        print('Star label - Sending label ${i + 1} of ${labelData.quantity} to printer...');
+        debugPrint('Star label - Sending label ${i + 1} of ${labelData.quantity} to printer...');
         
         final printStartTime = DateTime.now();
         
@@ -1249,7 +1250,7 @@ class PrinterBridge {
           await star.StarPrinter.printReceipt(printJob);
           
           final printDuration = DateTime.now().difference(printStartTime);
-          print('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms');
+          debugPrint('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms');
           
           // Small delay between prints to prevent buffer overflow
           if (i < labelData.quantity - 1) {
@@ -1260,10 +1261,10 @@ class PrinterBridge {
           final errorMessage = e.toString().toLowerCase();
           if (errorMessage.contains('holding paper') || errorMessage.contains('paper hold')) {
             if (!shownPaperHoldWarning) {
-              print('Star label - Paper hold detected - waiting for user to remove labels');
+              debugPrint('Star label - Paper hold detected - waiting for user to remove labels');
               shownPaperHoldWarning = true;
             }
-            print('Star label - Paper hold detected - waiting for user to remove label ${i + 1}');
+            debugPrint('Star label - Paper hold detected - waiting for user to remove label ${i + 1}');
             
             // Keep trying to print this label until it succeeds
             bool labelPrinted = false;
@@ -1272,7 +1273,7 @@ class PrinterBridge {
               try {
                 await star.StarPrinter.printReceipt(printJob);
                 labelPrinted = true;
-                print('Star label - Label ${i + 1} printed after paper removal');
+                debugPrint('Star label - Label ${i + 1} printed after paper removal');
               } catch (retryError) {
                 // Still holding, keep waiting
                 if (!retryError.toString().toLowerCase().contains('holding paper')) {
@@ -1283,7 +1284,7 @@ class PrinterBridge {
             }
             
             final printDuration = DateTime.now().difference(printStartTime);
-            print('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms (including wait time)');
+            debugPrint('Star label - Label ${i + 1} completed in ${printDuration.inMilliseconds}ms (including wait time)');
             
             // Small delay between prints
             if (i < labelData.quantity - 1) {
@@ -1296,10 +1297,10 @@ class PrinterBridge {
         }
       }
       
-      print('Star label - All ${labelData.quantity} label(s) printed successfully');
+      debugPrint('Star label - All ${labelData.quantity} label(s) printed successfully');
       return true;
     } catch (e) {
-      print('Star label print failed: $e');
+      debugPrint('Star label print failed: $e');
       return false;
     }
   }
@@ -1309,11 +1310,11 @@ class PrinterBridge {
       // Get actual printer dimensions
       Map<String, dynamic> dimensions;
       try {
-        print('Fetching Zebra printer dimensions for receipt...');
+        debugPrint('Fetching Zebra printer dimensions for receipt...');
         dimensions = await ZebraPrinter.getPrinterDimensions();
-        print('Raw dimensions received: $dimensions');
+        debugPrint('Raw dimensions received: $dimensions');
       } catch (e) {
-        print('Failed to get dimensions, using defaults: $e');
+        debugPrint('Failed to get dimensions, using defaults: $e');
         dimensions = {
           'printWidthInDots': 386, // ZD410 default
           'labelLengthInDots': 600, // longer for receipts
@@ -1329,16 +1330,16 @@ class PrinterBridge {
 
       // Validate dimensions and retry if needed
       if (width < 100 || height < 100) {
-        print('Dimensions seem invalid, retrying...');
+        debugPrint('Dimensions seem invalid, retrying...');
         await Future.delayed(const Duration(milliseconds: 300));
         try {
           final retryDimensions = await ZebraPrinter.getPrinterDimensions();
-          print('Retry dimensions: $retryDimensions');
+          debugPrint('Retry dimensions: $retryDimensions');
           final retryWidth = retryDimensions['printWidthInDots'] ?? 386;
           final retryHeight = retryDimensions['labelLengthInDots'] ?? 600;
           final retryDpi = retryDimensions['dpi'] ?? 203;
 
-          print(
+          debugPrint(
             'Using Zebra receipt dimensions (retry): ${retryWidth}x${retryHeight} @ ${retryDpi}dpi',
           );
           final receiptZpl = _generateZebraReceiptZPL(
@@ -1352,7 +1353,7 @@ class PrinterBridge {
             language: ZebraPrintLanguage.zpl,
           );
         } catch (retryError) {
-          print('Retry failed, using defaults: $retryError');
+          debugPrint('Retry failed, using defaults: $retryError');
           // Fallback to defaults
           final receiptZpl = _generateZebraReceiptZPL(
             386,
@@ -1366,7 +1367,7 @@ class PrinterBridge {
           );
         }
       } else {
-        print('Using Zebra receipt dimensions: ${width}x${height} @ ${dpi}dpi');
+        debugPrint('Using Zebra receipt dimensions: ${width}x${height} @ ${dpi}dpi');
         final receiptZpl = _generateZebraReceiptZPL(
           width,
           height,
@@ -1381,7 +1382,7 @@ class PrinterBridge {
 
       return true;
     } catch (e) {
-      print('Zebra receipt print failed: $e');
+      debugPrint('Zebra receipt print failed: $e');
       return false;
     }
   }
@@ -1431,7 +1432,7 @@ class PrinterBridge {
     storeNameX = storeNameX.clamp(0, width - estimatedStoreNameWidth);
     storeAddressX = storeAddressX.clamp(0, width - estimatedStoreAddressWidth);
 
-    print(
+    debugPrint(
       '[PrinterBridge] Receipt positioning - Store Name: ($storeNameX,64), Store Address: ($storeAddressX,388)',
     );
 
@@ -1537,10 +1538,10 @@ class PrinterBridge {
         ? height
         : minRequiredHeight;
 
-    print(
+    debugPrint(
       '[PrinterBridge] Receipt layout - Last item Y: $yPosition, Total Y: $totalY, Thank you Y: $thankYouY',
     );
-    print(
+    debugPrint(
       '[PrinterBridge] Receipt height - Detected: $height, Required: $minRequiredHeight, Using: $actualReceiptHeight',
     );
 
@@ -1639,10 +1640,10 @@ class PrinterBridge {
     final estimatedColorSizeWidth = colorSize.length * colorSizeCharWidth;
     final estimatedPriceWidth = price.length * priceCharWidth;
 
-    print(
+    debugPrint(
       'Zebra label font calculations - DPI: $dpi, Font 38: ${productNameCharWidth}dots/char, Font 25: ${colorSizeCharWidth}dots/char',
     );
-    print(
+    debugPrint(
       'Zebra label text widths - ProductName: ${estimatedProductNameWidth}dots, ColorSize: ${estimatedColorSizeWidth}dots, Price: ${estimatedPriceWidth}dots',
     );
 
@@ -1655,7 +1656,7 @@ class PrinterBridge {
     final colorSizeX = (paperWidthDots - estimatedColorSizeWidth) ~/ 2;
     final priceX = (paperWidthDots - estimatedPriceWidth) ~/ 2;
 
-    print(
+    debugPrint(
       'Zebra label positions - ProductName: ($productNameX,14), Price: ($priceX,52), ColorSize: ($colorSizeX,90), Barcode: ($barcodeX,124)',
     );
 
