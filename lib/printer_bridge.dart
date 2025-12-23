@@ -36,6 +36,45 @@ class EpsonConfig {
   }
 }
 
+/// Star printer configuration
+class StarConfig {
+  int _paperWidthMm = 58; // Default to 58mm for Star
+  static const List<int> availablePaperWidthsMm = [38, 58, 80];
+
+  /// Get current Star paper width setting in mm
+  int get paperWidthMm => _paperWidthMm;
+
+  /// Set Star paper width in mm (must be one of the available widths)
+  void setPaperWidthMm(int widthMm) {
+    if (availablePaperWidthsMm.contains(widthMm)) {
+      _paperWidthMm = widthMm;
+      debugPrint('PrinterBridge: Star paper width set to ${widthMm}mm');
+    } else {
+      debugPrint('PrinterBridge: Invalid paper width ${widthMm}mm. Available: $availablePaperWidthsMm');
+    }
+  }
+
+  /// Get printable area in mm based on current paper width
+  double get printableAreaMm {
+    switch (_paperWidthMm) {
+      case 38: return 34.5; // 38mm paper -> 34.5mm printable
+      case 58: return 48.0; // 58mm paper -> 48mm printable  
+      case 80: return 72.0; // 80mm paper -> 72mm printable
+      default: return 48.0; // Fallback to 58mm
+    }
+  }
+
+  /// Get layout type based on current paper width
+  String get layoutType {
+    switch (_paperWidthMm) {
+      case 38: return 'vertical_centered'; // Everything vertical and centered for narrow labels
+      case 58: return 'mixed'; // Mixed layout with some horizontal elements
+      case 80: return 'horizontal'; // Full horizontal layout for wide labels
+      default: return 'mixed'; // Fallback to 58mm
+    }
+  }
+}
+
 /// Universal line item class for receipts
 class PrinterLineItem {
   final String itemName;
@@ -107,6 +146,9 @@ class PrinterLabelData {
 class PrinterBridge {
   /// Epson printer configuration
   static final EpsonConfig epsonConfig = EpsonConfig();
+  
+  /// Star printer configuration
+  static final StarConfig starConfig = StarConfig();
   
   /// Cached Zebra printer dimensions to avoid repeated API calls
   static Map<String, int>? _cachedZebraDimensions;
@@ -1233,14 +1275,11 @@ class PrinterBridge {
 
   static Future<bool> _printStarReceipt(PrinterReceiptData receiptData) async {
     try {
-      // Calculate printable area based on paper width (default to 58mm)
-      // This matches the logic in main.dart for Star printers
-      double printableAreaMm = 48.0; // Default for 58mm paper
+      // Use StarConfig to get proper printable area based on configured paper width
+      final printableAreaMm = PrinterBridge.starConfig.printableAreaMm;
+      final paperWidthMm = PrinterBridge.starConfig.paperWidthMm;
       
-      // Paper width mapping: 38mm->34.5mm, 58mm->48mm, 80mm->72mm
-      // For now, we'll use the 58mm default but this could be configurable
-      
-      debugPrint('Star receipt - using printableAreaMm: $printableAreaMm');
+      debugPrint('Star receipt - using ${paperWidthMm}mm paper, printableAreaMm: $printableAreaMm');
       
       // Build structured layout settings to be interpreted by native layers
       // This follows the same pattern as main.dart _printStarReceipt()
@@ -1299,16 +1338,12 @@ class PrinterBridge {
     try {
       debugPrint('Star label print - Creating label print job for ${labelData.quantity} label(s)...');
       
-      // Calculate printable area based on paper width (default to 58mm)
-      // 38mm -> 34.5mm printable, 58mm -> 48mm printable, 80mm -> 72mm printable
-      // For now we'll default to 58mm but this could be made configurable
-      double printableAreaMm = 48.0; // Default to 58mm paper width
-      String layoutType = 'mixed'; // Default to mixed layout
+      // Use StarConfig to get proper printable area and layout type based on configured paper width
+      final printableAreaMm = PrinterBridge.starConfig.printableAreaMm;
+      final layoutType = PrinterBridge.starConfig.layoutType;
+      final paperWidthMm = PrinterBridge.starConfig.paperWidthMm;
       
-      // Note: In a full implementation, you might want to make paper width configurable
-      // For now, we'll use the same default as the receipt printing (58mm)
-      
-      debugPrint('Star label - using printableAreaMm: $printableAreaMm, layoutType: $layoutType');
+      debugPrint('Star label - using ${paperWidthMm}mm paper, printableAreaMm: $printableAreaMm, layoutType: $layoutType');
       
       // Extract label content from PrinterLabelData
       final productName = labelData.productName.isNotEmpty ? labelData.productName : 'PRODUCT NAME';

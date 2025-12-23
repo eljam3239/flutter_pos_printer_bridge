@@ -55,6 +55,9 @@ class _MyHomePageState extends State<MyHomePage> {
   // Epson paper width configuration  
   String _epsonPaperWidth = 'Unknown';
 
+  // Star paper width configuration
+  int _starPaperWidthMm = 58; // Will be synced with StarConfig
+
   // Zebra-specific fields for direct access
   List<DiscoveredPrinter> _zebraDiscoveredPrinters = [];
   DiscoveredPrinter? _selectedZebraPrinter;
@@ -64,6 +67,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void initState() {
     super.initState();
     _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+    _starPaperWidthMm = PrinterBridge.starConfig.paperWidthMm;
   }
 
   @override
@@ -311,6 +315,42 @@ class _MyHomePageState extends State<MyHomePage> {
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
               ),
             ],
+            
+            // Star paper width configuration
+            if (_selectedBrand == PrinterBrand.star) ...[
+              const SizedBox(height: 16),
+              const Text('Star Paper Width Configuration:', 
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<int>(
+                value: _starPaperWidthMm,
+                decoration: const InputDecoration(
+                  labelText: 'Paper Width (mm)',
+                  border: OutlineInputBorder(),
+                  helperText: 'Configurable paper width affects layout and printable area',
+                ),
+                items: StarConfig.availablePaperWidthsMm.map((widthMm) {
+                  return DropdownMenuItem(
+                    value: widthMm,
+                    child: Text('${widthMm}mm'),
+                  );
+                }).toList(),
+                onChanged: (int? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _starPaperWidthMm = newValue;
+                      PrinterBridge.starConfig.setPaperWidthMm(newValue);
+                    });
+                    debugPrint('📏 Star paper width manually set to: ${newValue}mm');
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Printable area: ${PrinterBridge.starConfig.printableAreaMm}mm, Layout: ${PrinterBridge.starConfig.layoutType}',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            ],
           ],
         ),
       ),
@@ -397,6 +437,40 @@ class _MyHomePageState extends State<MyHomePage> {
               const SizedBox(height: 8),
               Text(
                 'Note: These buttons detect your printer model and optimize the test accordingly.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+              ),
+            ],
+            
+            if (_selectedBrand == PrinterBrand.star && _isConnected) ...[
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 16),
+              
+              Text('Star Paper Width Tests:', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _testStarReceiptWidths,
+                    icon: const Icon(Icons.receipt),
+                    label: const Text('Test Receipt Widths'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _testStarLabelWidths,
+                    icon: const Icon(Icons.label),
+                    label: const Text('Test Label Layouts'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
+                  ),
+                ],
+              ),
+              
+              const SizedBox(height: 8),
+              Text(
+                'Tests how different paper widths (38mm/58mm/80mm) affect printable area and layout.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
               ),
             ],
@@ -968,6 +1042,151 @@ class _MyHomePageState extends State<MyHomePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Zebra receipt error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Test Star receipt printing with different paper widths
+  Future<void> _testStarReceiptWidths() async {
+    if (!_isConnected || _selectedBrand != PrinterBrand.star) return;
+
+    try {
+      debugPrint('🌟 Testing Star receipt printing with different paper widths...');
+      
+      final receiptData = PrinterReceiptData(
+        storeName: 'Star Width Test Store',
+        storeAddress: 'Testing Different Paper Widths',
+        storePhone: '(555) STAR-TEST',
+        date: DateTime.now().toLocal().toString().split(' ')[0],
+        time: TimeOfDay.now().format(context),
+        cashierName: 'Width Tester',
+        receiptNumber: 'SW${DateTime.now().millisecondsSinceEpoch % 10000}',
+        laneNumber: '38-58-80',
+        items: [
+          PrinterLineItem(itemName: '38mm Paper Test', quantity: 1, unitPrice: 34.5, totalPrice: 34.5),
+          PrinterLineItem(itemName: '58mm Paper Test', quantity: 1, unitPrice: 48.0, totalPrice: 48.0),
+          PrinterLineItem(itemName: '80mm Paper Test', quantity: 1, unitPrice: 72.0, totalPrice: 72.0),
+        ],
+        thankYouMessage: 'Current setting: ${_starPaperWidthMm}mm (${PrinterBridge.starConfig.printableAreaMm}mm printable)',
+      );
+
+      // Store original width
+      final originalWidth = PrinterBridge.starConfig.paperWidthMm;
+      
+      for (final widthMm in [38, 58, 80]) {
+        debugPrint('🌟 Testing with ${widthMm}mm paper width...');
+        
+        // Update StarConfig
+        setState(() {
+          _starPaperWidthMm = widthMm;
+          PrinterBridge.starConfig.setPaperWidthMm(widthMm);
+        });
+        
+        // Print receipt with this width setting
+        final success = await PrinterBridge.printReceipt('star', receiptData);
+        
+        if (!success) {
+          throw Exception('Failed to print receipt with ${widthMm}mm width');
+        }
+        
+        debugPrint('✅ ${widthMm}mm receipt printed (printable: ${PrinterBridge.starConfig.printableAreaMm}mm)');
+        
+        // Small delay between prints
+        await Future.delayed(const Duration(milliseconds: 1000));
+      }
+      
+      // Restore original width
+      setState(() {
+        _starPaperWidthMm = originalWidth;
+        PrinterBridge.starConfig.setPaperWidthMm(originalWidth);
+      });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Star receipt width test completed! Check your receipts to see the differences.'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 5),
+        ),
+      );
+    } catch (e) {
+      debugPrint('❌ Star receipt width test error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Star receipt width test error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Test Star label printing with different paper widths and layouts
+  Future<void> _testStarLabelWidths() async {
+    if (!_isConnected || _selectedBrand != PrinterBrand.star) return;
+
+    try {
+      debugPrint('🌟 Testing Star label printing with different paper widths and layouts...');
+      
+      // Store original width
+      final originalWidth = PrinterBridge.starConfig.paperWidthMm;
+      
+      for (final widthMm in [38, 58, 80]) {
+        debugPrint('🌟 Testing label with ${widthMm}mm paper width...');
+        
+        // Update StarConfig
+        setState(() {
+          _starPaperWidthMm = widthMm;
+          PrinterBridge.starConfig.setPaperWidthMm(widthMm);
+        });
+        
+        final printableArea = PrinterBridge.starConfig.printableAreaMm;
+        final layoutType = PrinterBridge.starConfig.layoutType;
+        
+        // Create label data that shows the current configuration
+        final labelData = PrinterLabelData(
+          productName: '${widthMm}mm Test Product',
+          price: '\$${printableArea.toStringAsFixed(1)}',
+          colorSize: '${layoutType.replaceAll('_', ' ')} layout',
+          barcode: '${widthMm}${printableArea.toInt()}${DateTime.now().millisecondsSinceEpoch % 1000}',
+          quantity: 1,
+        );
+        
+        // Print label with this width setting
+        final success = await PrinterBridge.printLabel('star', labelData);
+        
+        if (!success) {
+          throw Exception('Failed to print label with ${widthMm}mm width');
+        }
+        
+        debugPrint('✅ ${widthMm}mm label printed (${printableArea}mm printable, ${layoutType} layout)');
+        
+        // Small delay between prints
+        await Future.delayed(const Duration(milliseconds: 1000));
+      }
+      
+      // Restore original width
+      setState(() {
+        _starPaperWidthMm = originalWidth;
+        PrinterBridge.starConfig.setPaperWidthMm(originalWidth);
+      });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Star label layout test completed! Compare the different layouts: vertical_centered (38mm), mixed (58mm), horizontal (80mm).'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 6),
+        ),
+      );
+    } catch (e) {
+      debugPrint('❌ Star label width test error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Star label width test error: $e'),
           backgroundColor: Colors.red,
         ),
       );
