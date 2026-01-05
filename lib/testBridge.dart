@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:zebra_printer/zebra_printer.dart';
 import 'package:flutter/foundation.dart';
 import 'printer_bridge.dart';
@@ -62,6 +65,11 @@ class _MyHomePageState extends State<MyHomePage> {
   List<DiscoveredPrinter> _zebraDiscoveredPrinters = [];
   DiscoveredPrinter? _selectedZebraPrinter;
   Map<String, int>? _zebraDimensions; // Store dimensions after connection
+
+  // Image picker state
+  String? _logoBase64;
+  int _imageWidthPx = 200;
+  int _imageSpacingLines = 1;
 
   @override
   void initState() {
@@ -474,6 +482,49 @@ class _MyHomePageState extends State<MyHomePage> {
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
               ),
             ],
+
+            // Image picker section (universal for all brands)
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 16),
+            
+            Text('Receipt Logo', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _pickLogoImage,
+                    icon: const Icon(Icons.image),
+                    label: const Text('Pick Logo Image'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (_logoBase64 != null)
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Icon(Icons.check, color: Colors.green),
+                  ),
+              ],
+            ),
+            
+            if (_logoBase64 != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Image loaded (${_imageWidthPx}px width). Will be included in receipt printing tests.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontStyle: FontStyle.italic,
+                  color: Colors.green[700],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -809,6 +860,7 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
         thankYouMessage: 'Thank you for testing PrinterBridge!',
+        logoBase64: _logoBase64, // Include logo if selected
       );
       
       // For Zebra printers with stored dimensions, use enhanced printing with dynamic height
@@ -904,6 +956,7 @@ class _MyHomePageState extends State<MyHomePage> {
         PrinterLineItem(itemName: 'ZD421 Optimized Item 2', quantity: 2, unitPrice: 7.25, totalPrice: 14.50),
       ],
       thankYouMessage: 'ZD421 Receipt Test Complete!',
+      logoBase64: _logoBase64, // Include logo if selected
     );
     
     await _testReceiptPrintingWithData(receiptData);
@@ -1070,6 +1123,7 @@ class _MyHomePageState extends State<MyHomePage> {
           PrinterLineItem(itemName: '80mm Paper Test', quantity: 1, unitPrice: 72.0, totalPrice: 72.0),
         ],
         thankYouMessage: 'Current setting: ${_starPaperWidthMm}mm (${PrinterBridge.starConfig.printableAreaMm}mm printable)',
+        logoBase64: _logoBase64, // Include logo if selected
       );
 
       // Store original width
@@ -1189,6 +1243,64 @@ class _MyHomePageState extends State<MyHomePage> {
           content: Text('Star label width test error: $e'),
           backgroundColor: Colors.red,
         ),
+      );
+    }
+  }
+
+  Future<void> _pickLogoImage() async {
+    // Support iOS & Android; silently ignore on other platforms
+    if (!(Platform.isIOS || Platform.isAndroid)) {
+      debugPrint('DEBUG: Image picking not supported on this platform');
+      return;
+    }
+    try {
+      // Optional Android permission (may be unnecessary on newer Android photo picker API)
+      if (Platform.isAndroid) {
+        try {
+          final storageStatus = await Permission.storage.status;
+          if (storageStatus.isDenied) {
+            final result = await Permission.storage.request();
+            if (!result.isGranted) {
+              debugPrint('DEBUG: Storage permission denied (continuing, picker may still work).');
+            }
+          }
+        } catch (permErr) {
+          debugPrint('DEBUG: Storage permission check threw (ignoring): $permErr');
+        }
+      }
+      
+      final picker = ImagePicker();
+      final XFile? file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+      if (file == null) {
+        debugPrint('DEBUG: Image pick cancelled');
+        return;
+      }
+      
+      final bytes = await file.readAsBytes();
+      // Heuristic: decide target width based on original size
+      int suggestedWidth = 200;
+      try {
+        if (bytes.lengthInBytes > 4000000) {
+          suggestedWidth = 384;
+        } else if (bytes.lengthInBytes > 1000000) {
+          suggestedWidth = 320;
+        } else if (bytes.lengthInBytes > 300000) {
+          suggestedWidth = 256;
+        }
+      } catch (_) {}
+      
+      final b64 = base64Encode(bytes);
+      setState(() {
+        _logoBase64 = b64;
+        _imageWidthPx = suggestedWidth;
+      });
+      
+      debugPrint('DEBUG: Picked image size=${bytes.lengthInBytes} bytes, suggestedWidth=$suggestedWidth platform=${Platform.isIOS ? 'iOS' : 'Android'}');
+    } catch (e) {
+      debugPrint('DEBUG: Failed to pick image: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Logo pick failed: $e'))
       );
     }
   }

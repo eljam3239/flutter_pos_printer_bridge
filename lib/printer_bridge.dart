@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -921,6 +922,64 @@ class PrinterBridge {
           parameters: {'align': 'left'},
         ),
       );
+    }
+
+    // Add logo image if provided (matching main.dart implementation)
+    if (receiptData.logoBase64 != null && receiptData.logoBase64!.isNotEmpty) {
+      // Persist logo to temp file for native side
+      try {
+        final bytes = base64Decode(receiptData.logoBase64!);
+        // NOTE: Synchronous write acceptable for small logo; could be pre-written earlier.
+        final tmpDir = Directory.systemTemp;
+        final file = File('${tmpDir.path}/epson_logo_${DateTime.now().millisecondsSinceEpoch}.png');
+        file.writeAsBytesSync(bytes, flush: true);
+        
+        // Estimate printer width in dots for different paper sizes
+        int estimatePrinterDots() {
+          final paperWidth = PrinterBridge.epsonConfig.paperWidth;
+          switch (paperWidth) {
+            case '58mm': return 384;   // 58mm
+            case '60mm': return 424;   // 60mm  
+            case '70mm': return 495;   // 70mm
+            case '76mm': return 536;   // 76mm
+            case '80mm': return 576;   // 80mm
+            default: return 576; // fallback to 80mm
+          }
+        }
+        final printerWidthDots = estimatePrinterDots();
+
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.image, parameters: {
+          'imagePath': file.path,
+          'printerWidth': printerWidthDots,
+          'targetWidth': 200, // Default image width
+          'align': 'center',
+          'advancedProcessing': false,
+        }));
+        
+        // Add spacing after image
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+      } catch (e) {
+        // Fallback marker if file write fails
+        debugPrint('PrinterBridge: Image processing failed: $e');
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'center'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': '[LOGO ERR]\n'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'left'},
+          ),
+        );
+      }
     }
 
     // Centered 'Receipt'
