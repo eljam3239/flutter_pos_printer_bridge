@@ -41,6 +41,9 @@ dependencies:
   # Image picking for POS logo
   image_picker: ^1.1.2
 
+  # Image processing for ZPL conversion
+  image: ^4.1.7
+
   # Epson printer plugin
   epson_printer:
     path: packages/epson/epson_printer

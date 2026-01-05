@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
@@ -1665,10 +1666,41 @@ class PrinterBridge {
 ^FDReceipt No: ${receiptData.receiptNumber}^FS''';
     }
 
-    // Add logo (keeping the existing logo from main.dart)
-    receiptZpl += '''
+    // Add logo if provided (dynamic conversion from base64)
+    if (receiptData.logoBase64 != null && receiptData.logoBase64!.isNotEmpty) {
+      try {
+        debugPrint('[PrinterBridge] Converting logo image to ZPL...');
+        final logoZpl = convertImageToZPL(
+          receiptData.logoBase64!,
+          maxWidth: 400,  // 3x larger than before (was 200)
+          maxHeight: 200, // 2x larger than before (was 100)
+        );
+        
+        if (logoZpl.isNotEmpty) {
+          // Position logo at same location as hardcoded logo
+          receiptZpl += '''
 ^FO200,132
-^GFA,7200,7200,30,!::::::::::::::::::::::::::::::::::::::::::::::gVF03!gTFCJ0!gTFL0!XFCH0RF8L03!:WFEJ07OFEM01!WFK01OFCN0!VFCL03NFO01!VF8L01MFEP0!UFCN0MFCP07!:UF8N07LF8I01HFJ07!UFO03LFI01IFCI03!UFI03HFJ0LFI07IFK0!TFEI0IFJ07JFCI0IFEK0!TFCH03HFEJ07JFCH03IFEK07!:TFCH0IFEJ03JF8H07IFEH08H07!TFH01IFE02H03JF8H0JFE03CH07!TFH03JF03H01JFI0KF03EH03!TFH03JFCFC01JFH01MFEH03!SFEH07LFC01JFH01MFEH03!:SFEH07LFCH0JFH01NFH01!SFEH07LFEH0IFEH03NFH01!SFEH0MFEH0IFEH03NFH01!:::SFEH0MFEH0HF9EH03NFH01!SFEH0MFEH0FC0EH03NFH01!SFEH0MFEH0FH0EH03NFH01!SFEH07LFEH0EH0EH03NFH01!SFEH07LFC01CH03H01NFH01!:SFEH07LFCK03H01MFEH03!TFH03LFL01I0MFEH03!TFH03LFL01I0MFCH03!TFH01KFEL018H07LFCH07!TFCH0KFCM08H03LF8H07!:TFCH03JF8M0CH03LFI07!TFEI0IFCN04I0LF8H0!UFH03JFN07H03LFE03!UF81KFEM0380NFC3!UF87LFM0381OF7!:gIFN0C3!gIFN07!gHFEN03!gHFCN01!gHFCO0!:gHFCO03!gHF8O01!gHF8P07!gHF8P03!gHF8Q07!:gHF8R0!gHFES0!gHFES03!gIFT07!gIFCS0!:gIFER03!gJFR07!gJFQ01!gJF8P03!gJFCO01!:gKF8N07!gKFCM03!gKFEM0!gLFCK03!gMFJ07!:gNFH0!!:::::::::::::gFH0!XFCK07!:WFCM01!VFEP0!VFR0!UF8R01!TFET01!:TFCU07!SFEW0!SFCW01!SFY03!RFCg0!:RF8g03!RFgH07!QFEgH01!QFCgI03!QFgJ01!:PFEgK07XFC!PFCgL0XF0!PFCgL07VF80!MFgP01UFCH0!LFgR0UFCH0!:KFC03FCgN01UFC0!KF03HFCgO0UFC0!JFE0IF8gO07TFC0!JF81IFgR0SFC0!JF83IFgS03QFC0!:JF0IFEgT01PFC0!IFC1IFCgU03OFC0!IF81IFCgV07NFC0!IF83IFgX0NFC0!IF03IFgX03MFC0!:IF07HFEgX01MFC0!IF07HFEgY03LFC0!HFE07HFEh0LFC0!HFE07HFEh07KFC0!HFE07HFEhG07JFC0!:HFE07HFEhH03IFC0!HFC0IFEhH01IFC0!HFC0JFhI0IFC0!HFC07IFhI07HFC0!HFC07IFChH07HFC0!:HFC07IFEhH07HFC0!HFC07JFU078gK03HFC0!HFC07JF8T07gL03HFC0!HFE07KFQ07E04gM0HFC0!HFE07KFCN01HFE04gM07FC0!:HFE03LFEM0IFEgO03FC0!HFE03NFE07FE0IFEgO01FC0!IF03NFE0HFE0IFEgO01FC0!IF01NFE0HFE0IFEgP0FC0!IF80NFC1HFE0IFEgP03C0!:IF80NFC1HFE0IFEgP01C0!IFC03MF83HFE0IFEgQ0C0!IFC01MF8IFE0IFEgQ0C0!JFH0MF0IFE07HFEgQ040!JF807KFC1IFE07HFEgQ040!:JFC03KF83IFE07HFCgS0!JFEH0KF07JF03HF8gS0!KFH03IFC3KFH0HFgT03!JFCI03FC07KF8gX0!JF8L01LFCI0CgT03HF:JF83CI01NF8078gO03E3!JF1HF8I0QF8gK07!JF3HFEJ03OF8gH07!JF3IFCK0NF8Y07!IFC7JFM0KF8W03!:JF7JFCgL03!PFgJ07!PFCgK0!QFgM0!QFEgN07RFC!:SFK07HF8gG0OFC0!gNFCgJ03!gRFg07!gTF8V0!gVFCQ03!:!:::::::^FS
+$logoZpl^FS''';
+        } else {
+          debugPrint('[PrinterBridge] Logo conversion failed, using placeholder');
+          // Fallback: Add a simple text placeholder
+          receiptZpl += '''
+^CF0,25
+^FO200,132
+^FD[LOGO]^FS''';
+        }
+      } catch (e) {
+        debugPrint('[PrinterBridge] Logo processing error: $e');
+        // Fallback: Add a simple text placeholder
+        receiptZpl += '''
+^CF0,25
+^FO200,132
+^FD[LOGO ERR]^FS''';
+      }
+    }
+
+    // Add separator line
+    receiptZpl += '''
 ^FO44,574^GB554,1,2,B,0^FS''';
 
     // Add line items dynamically
@@ -1861,5 +1893,96 @@ class PrinterBridge {
       'Dec',
     ];
     return months[month - 1];
+  }
+
+  /// Convert base64 image to ZPL ^GF graphic field
+  /// Uses threshold conversion for clean black/white output
+  /// Auto-scales images to fit Zebra printer memory limits
+  static String convertImageToZPL(
+    String base64Image, {
+    int maxWidth = 400,    // Increased from 200 for larger images
+    int maxHeight = 200,   // Increased from 100 for larger images
+    int threshold = 128,
+  }) {
+    try {
+      // Decode base64 image
+      final imageBytes = base64Decode(base64Image);
+      final originalImage = img.decodeImage(imageBytes);
+      
+      if (originalImage == null) {
+        debugPrint('PrinterBridge: Failed to decode image');
+        return '';
+      }
+
+      // Calculate scaled dimensions to fit within limits while maintaining aspect ratio
+      final originalWidth = originalImage.width;
+      final originalHeight = originalImage.height;
+      
+      double scaleX = maxWidth / originalWidth;
+      double scaleY = maxHeight / originalHeight;
+      double scale = scaleX < scaleY ? scaleX : scaleY; // Use smaller scale to fit both dimensions
+      
+      final scaledWidth = (originalWidth * scale).round();
+      final scaledHeight = (originalHeight * scale).round();
+      
+      debugPrint('PrinterBridge: Image scaling ${originalWidth}x${originalHeight} -> ${scaledWidth}x${scaledHeight} (scale: ${scale.toStringAsFixed(2)})');
+      
+      // Resize image if needed
+      img.Image resizedImage = originalImage;
+      if (scale < 1.0) {
+        resizedImage = img.copyResize(originalImage, width: scaledWidth, height: scaledHeight);
+      }
+      
+      // Convert to grayscale for consistent threshold processing
+      final grayscaleImage = img.grayscale(resizedImage);
+      
+      // Apply threshold to convert to pure black and white
+      for (int y = 0; y < grayscaleImage.height; y++) {
+        for (int x = 0; x < grayscaleImage.width; x++) {
+          final pixel = grayscaleImage.getPixel(x, y);
+          final luminance = img.getLuminanceRgb(pixel.r.toInt(), pixel.g.toInt(), pixel.b.toInt());
+          final newColor = luminance >= threshold ? img.ColorRgb8(255, 255, 255) : img.ColorRgb8(0, 0, 0);
+          grayscaleImage.setPixel(x, y, newColor);
+        }
+      }
+      
+      // Calculate bytes per row (must be multiple of 8 bits)
+      final bytesPerRow = ((grayscaleImage.width + 7) ~/ 8);
+      final totalBytes = bytesPerRow * grayscaleImage.height;
+      
+      // Convert to ZPL hex data
+      final hexData = StringBuffer();
+      for (int y = 0; y < grayscaleImage.height; y++) {
+        for (int byteIndex = 0; byteIndex < bytesPerRow; byteIndex++) {
+          int byteValue = 0;
+          
+          // Pack 8 pixels into one byte
+          for (int bit = 0; bit < 8; bit++) {
+            final x = byteIndex * 8 + bit;
+            if (x < grayscaleImage.width) {
+              final pixel = grayscaleImage.getPixel(x, y);
+              final isBlack = img.getLuminanceRgb(pixel.r.toInt(), pixel.g.toInt(), pixel.b.toInt()) < threshold;
+              if (isBlack) {
+                byteValue |= (1 << (7 - bit)); // Set bit for black pixels
+              }
+            }
+          }
+          
+          // Convert byte to hex (uppercase)
+          hexData.write(byteValue.toRadixString(16).toUpperCase().padLeft(2, '0'));
+        }
+      }
+      
+      // Build ZPL ^GF command
+      // Format: ^GFA,total_bytes,total_bytes,bytes_per_row,data
+      final zplCommand = '^GFA,$totalBytes,$totalBytes,$bytesPerRow,${hexData.toString()}';
+      
+      debugPrint('PrinterBridge: Generated ZPL image ${grayscaleImage.width}x${grayscaleImage.height}, $totalBytes bytes');
+      
+      return zplCommand;
+    } catch (e) {
+      debugPrint('PrinterBridge: Image to ZPL conversion failed: $e');
+      return '';
+    }
   }
 }
