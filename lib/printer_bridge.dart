@@ -898,34 +898,7 @@ class PrinterBridge {
       );
     }
 
-    // Store address
-    if (receiptData.storeAddress.trim().isNotEmpty) {
-      cmds.add(
-        EpsonPrintCommand(
-          type: EpsonCommandType.text,
-          parameters: {'align': 'center'},
-        ),
-      );
-      // Wrap location text to respect the selected paper width
-      final wrappedLocationLines = wrapText(
-        receiptData.storeAddress.trim(),
-        effectiveCharsPerLine,
-      );
-      for (String line in wrappedLocationLines) {
-        cmds.add(
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': line + '\n'},
-          ),
-        );
-      }
-      cmds.add(
-        EpsonPrintCommand(
-          type: EpsonCommandType.text,
-          parameters: {'align': 'left'},
-        ),
-      );
-    }
+    
 
     // Add logo image if provided (matching main.dart implementation)
     if (receiptData.logoBase64 != null && receiptData.logoBase64!.isNotEmpty) {
@@ -985,6 +958,35 @@ class PrinterBridge {
       }
     }
 
+    // Store address
+    if (receiptData.storeAddress.trim().isNotEmpty) {
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'center'},
+        ),
+      );
+      // Wrap location text to respect the selected paper width
+      final wrappedLocationLines = wrapText(
+        receiptData.storeAddress.trim(),
+        effectiveCharsPerLine,
+      );
+      for (String line in wrappedLocationLines) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': line + '\n'},
+          ),
+        );
+      }
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'left'},
+        ),
+      );
+    }
+
     // Centered 'Receipt'
     cmds.add(
       EpsonPrintCommand(
@@ -995,7 +997,7 @@ class PrinterBridge {
     cmds.add(
       EpsonPrintCommand(
         type: EpsonCommandType.text,
-        parameters: {'data': '\nReceipt\n'},
+        parameters: {'data': '\n${receiptData.receiptTitle}\n'},
       ),
     );
     cmds.add(
