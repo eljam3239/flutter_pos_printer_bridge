@@ -830,13 +830,44 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  /// Format MongoDB date according to POS date format preferences (numbers only)
+  String _formatMongoDate(String mongoDateString, String dateFormat) {
+    if (mongoDateString.isEmpty) return '';
+    
+    DateTime date = DateTime.parse(mongoDateString);
+    
+    switch (dateFormat) {
+      case 'MMM DD, YYYY':
+      case 'MMM Do, YYYY':
+      case 'MMMM Do, YYYY':
+        return '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}';
+      case 'MMM YYYY DD':
+      case 'MMM YY DD':
+        return '${date.month.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}/${date.day.toString().padLeft(2, '0')}';
+      case 'DD/MM/YYYY':
+        return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+      case 'DD/MM/YY':
+        return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}';
+      case 'YY/MM/DD':
+        return '${date.year.toString().substring(2)}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+      case 'MM/DD/YY':
+        return '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}';
+      default:
+        return '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}'; // Default MM/DD/YYYY
+    }
+  }
+
   /// Creates the primary test receipt data used across all receipt tests
   PrinterReceiptData _createPrimaryReceiptData() {
+    // Simulate MongoDB date and format from your POS system
+    const mongoDate = "2026-01-06T15:44:06.573+00:00";
+    const dateFormat = "MMM Do, YYYY";
+    
     return PrinterReceiptData(
       storeName: 'Metro INC',
       storeAddress: '1030 Adelaide St. N London, ON N5Y 2M9',
       storePhone: '(555) 123-BRIDGE',
-      date: '12/19/2025',
+      date: _formatMongoDate(mongoDate, dateFormat), // Use helper with MongoDB date
       time: '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
       cashierName: 'Harshil',
       receiptNumber: 'ORD584106',
