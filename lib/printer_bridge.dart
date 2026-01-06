@@ -106,6 +106,7 @@ class PrinterReceiptData {
   final String? thankYouMessage;
   final String? logoBase64;
   final DateTime? transactionDate;
+  final String receiptTitle; // New field for customizable receipt title
 
   PrinterReceiptData({
     required this.storeName,
@@ -120,6 +121,7 @@ class PrinterReceiptData {
     this.thankYouMessage,
     this.logoBase64,
     this.transactionDate,
+    this.receiptTitle = 'Store Receipt',
   });
 
   /// Calculate total from all line items
@@ -1360,6 +1362,7 @@ class PrinterBridge {
             'lane': receiptData.laneNumber ?? '',
             'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
             'printableAreaMm': printableAreaMm,
+            'receiptTitle': receiptData.receiptTitle, // Pass the configurable receipt title
           },
           'items': receiptData.items.map((item) => {
             'quantity': item.quantity.toString(),

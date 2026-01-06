@@ -837,14 +837,15 @@ class _MyHomePageState extends State<MyHomePage> {
       debugPrint('🧾 Testing PrinterBridge.printReceipt...');
       
       final receiptData = PrinterReceiptData(
-        storeName: 'Bridge Test Store',
-        storeAddress: '123 Bridge Ave, Test City',
+        storeName: 'Metro INC',
+        storeAddress: '1030 Adelaide St. N London, ON N5Y 2M9',
         storePhone: '(555) 123-BRIDGE',
         date: '12/19/2025',
         time: '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
-        cashierName: 'Bridge Tester',
+        cashierName: 'Harshil',
         receiptNumber: 'BR-${DateTime.now().millisecondsSinceEpoch % 10000}',
         laneNumber: '1',
+        receiptTitle: 'Store Receipt',
         items: [
           PrinterLineItem(
             itemName: 'Bridge Test Item A',
@@ -951,6 +952,7 @@ class _MyHomePageState extends State<MyHomePage> {
       cashierName: 'ZD421 Tester',
       receiptNumber: 'ZD-${DateTime.now().millisecondsSinceEpoch % 10000}',
       laneNumber: 'ZD421',
+      receiptTitle: 'Store Receipt', // Test with different title for ZD421
       items: [
         PrinterLineItem(itemName: 'ZD421 Optimized Item 1', quantity: 1, unitPrice: 15.50, totalPrice: 15.50),
         PrinterLineItem(itemName: 'ZD421 Optimized Item 2', quantity: 2, unitPrice: 7.25, totalPrice: 14.50),
@@ -1116,7 +1118,8 @@ class _MyHomePageState extends State<MyHomePage> {
         time: TimeOfDay.now().format(context),
         cashierName: 'Width Tester',
         receiptNumber: 'SW${DateTime.now().millisecondsSinceEpoch % 10000}',
-        laneNumber: '38-58-80',
+        laneNumber: '3',
+        receiptTitle: 'Store Receipt', // Test with all caps title
         items: [
           PrinterLineItem(itemName: '38mm Paper Test', quantity: 1, unitPrice: 34.5, totalPrice: 34.5),
           PrinterLineItem(itemName: '58mm Paper Test', quantity: 1, unitPrice: 48.0, totalPrice: 48.0),

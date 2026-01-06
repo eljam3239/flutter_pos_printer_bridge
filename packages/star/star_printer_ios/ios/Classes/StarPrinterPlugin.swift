@@ -522,6 +522,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let receiptNum = (details?["receiptNum"] as? String) ?? ""
     let lane = (details?["lane"] as? String) ?? ""
     let footer = (details?["footer"] as? String) ?? ""
+    let receiptTitle = (details?["receiptTitle"] as? String) ?? "Receipt"  // Extract configurable receipt title
     // Label-specific details
     let category = (details?["category"] as? String) ?? ""
     let size = (details?["size"] as? String) ?? ""
@@ -708,7 +709,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                                                  lane: lane,
                                                                  footer: footer,
                                                                  items: items,
-                                                                 imageWidth: CGFloat(detailsCanvasDots)) {
+                                                                 imageWidth: CGFloat(detailsCanvasDots),
+                                                                 receiptTitle: receiptTitle) {
                             let param = StarXpandCommand.Printer.ImageParameter(image: detailsImage, width: detailsCanvasDots)
                             _ = printerBuilder.actionPrintImage(param)
                             _ = printerBuilder.actionFeedLine(1)
@@ -722,10 +724,10 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 .styleAlignment(.left)
                             _ = printerBuilder.actionFeedLine(1) // blank line
                         }
-                        // Centered Tax Invoice
+                        // Centered Store Receipt title
                         _ = printerBuilder
                             .styleAlignment(.center)
-                            .actionPrintText("Tax Invoice\n")
+                            .actionPrintText("\(receiptTitle)\n")
                             .styleAlignment(.left)
                         // Line: left date/time, right cashier
                         let left1 = "\(dateText) \(timeText)"
@@ -1442,7 +1444,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     }
 
     // Helper: render the details block into an image for graphics-only printers
-    private func createDetailsImage(location: String, date: String, time: String, cashier: String, receiptNum: String, lane: String, footer: String, items: [[String: Any]] = [], imageWidth: CGFloat = 576) -> UIImage? {
+    private func createDetailsImage(location: String, date: String, time: String, cashier: String, receiptNum: String, lane: String, footer: String, items: [[String: Any]] = [], imageWidth: CGFloat = 576, receiptTitle: String = "Receipt") -> UIImage? {
         let font = UIFont.systemFont(ofSize: 22)
         let smallFont = UIFont.systemFont(ofSize: 20)
         let backgroundColor = UIColor.white
@@ -1455,7 +1457,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         var lines: [(String, UIFont, NSMutableParagraphStyle)] = []
         if !location.isEmpty { lines.append((location, font, paraCenter)) }
         lines.append(("", smallFont, paraLeft)) // blank line
-        lines.append(("Tax Invoice", font, paraCenter))
+        lines.append((receiptTitle, font, paraCenter))
         // date time (left) and cashier (right) on same line -> render via two columns
         let left1 = "\(date) \(time)"
         let right1 = cashier.isEmpty ? "" : "Cashier: \(cashier)"

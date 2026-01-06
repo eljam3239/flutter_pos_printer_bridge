@@ -410,6 +410,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val receiptNum = (details?.get("receiptNum") as? String)?.trim().orEmpty()
         val lane = (details?.get("lane") as? String)?.trim().orEmpty()
         val footer = (details?.get("footer") as? String)?.trim().orEmpty()
+        val receiptTitle = (details?.get("receiptTitle") as? String)?.trim() ?: "Receipt"  // Extract configurable receipt title
         
         // Barcode
         val barcodeContent = (barcodeBlock?.get("content") as? String)?.trim().orEmpty()
@@ -563,7 +564,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           if (graphicsOnly) {
             // Force label printers to use targetDots for proper width like iOS
             val detailsCanvas = targetDots
-            val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, detailsCanvas)
+            val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, detailsCanvas, receiptTitle)
             if (detailsBmp != null) {
               printerBuilder.actionPrintImage(ImageParameter(detailsBmp, detailsCanvas)).actionFeedLine(1)
             }
@@ -573,8 +574,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
               printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$locationText\n").styleAlignment(Alignment.Left)
               printerBuilder.actionFeedLine(1) // blank line
             }
-            // Centered Tax Invoice
-            printerBuilder.styleAlignment(Alignment.Center).actionPrintText("Tax Invoice\n").styleAlignment(Alignment.Left)
+            // Centered Receipt Title (configurable)
+            printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$receiptTitle\n").styleAlignment(Alignment.Left)
             
             // For TSP650II - use manual space padding since .setWidth() isn't supported
             val modelStr = printer?.information?.model?.toString()?.lowercase() ?: ""
@@ -1284,7 +1285,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     lane: String,
     footer: String,
     items: List<*>?,
-    canvasWidth: Int
+    canvasWidth: Int,
+    receiptTitle: String = "Receipt"  // Add receiptTitle parameter with default
   ): Bitmap? {
     val width = canvasWidth.coerceIn(8, 576)
     val padding = 20
@@ -1329,7 +1331,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       totalHeight += spacer.height
     }
 
-    val tax = buildLayout("Tax Invoice", titlePaint, Layout.Alignment.ALIGN_CENTER)
+    val tax = buildLayout(receiptTitle, titlePaint, Layout.Alignment.ALIGN_CENTER)
     layouts.add(tax)
     totalHeight += tax.height
 
