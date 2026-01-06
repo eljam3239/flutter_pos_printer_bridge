@@ -830,39 +830,50 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  /// Creates the primary test receipt data used across all receipt tests
+  PrinterReceiptData _createPrimaryReceiptData() {
+    return PrinterReceiptData(
+      storeName: 'Metro INC',
+      storeAddress: '1030 Adelaide St. N London, ON N5Y 2M9',
+      storePhone: '(555) 123-BRIDGE',
+      date: '12/19/2025',
+      time: '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+      cashierName: 'Harshil',
+      receiptNumber: 'ORD584106',
+      laneNumber: '1',
+      receiptTitle: 'Store Receipt',
+      items: [
+        PrinterLineItem(
+          itemName: 'Alpine Fir Diffuser',
+          quantity: 1,
+          unitPrice: 38.00,
+          totalPrice: 38.00,
+        ),
+        PrinterLineItem(
+          itemName: 'Air Essential Sweatshirt',
+          quantity: 1,
+          unitPrice: 148.00,
+          totalPrice: 148.00,
+        ),
+        PrinterLineItem(
+          itemName: 'A-Line Stripe Embroidered Dress',
+          quantity: 1,
+          unitPrice: 145.00,
+          totalPrice: 145.00,
+        )
+      ],
+      thankYouMessage: 'Thank you for your purchase!',
+      logoBase64: _logoBase64, // Include logo if selected
+    );
+  }
+
   Future<void> _testReceiptPrinting() async {
     if (!_isConnected || _selectedPrinter == null) return;
     
     try {
       debugPrint('🧾 Testing PrinterBridge.printReceipt...');
       
-      final receiptData = PrinterReceiptData(
-        storeName: 'Metro INC',
-        storeAddress: '1030 Adelaide St. N London, ON N5Y 2M9',
-        storePhone: '(555) 123-BRIDGE',
-        date: '12/19/2025',
-        time: '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
-        cashierName: 'Harshil',
-        receiptNumber: 'BR-${DateTime.now().millisecondsSinceEpoch % 10000}',
-        laneNumber: '1',
-        receiptTitle: 'Store Receipt',
-        items: [
-          PrinterLineItem(
-            itemName: 'Bridge Test Item A',
-            quantity: 2,
-            unitPrice: 12.50,
-            totalPrice: 25.00,
-          ),
-          PrinterLineItem(
-            itemName: 'Bridge Test Item B',
-            quantity: 1,
-            unitPrice: 8.99,
-            totalPrice: 8.99,
-          ),
-        ],
-        thankYouMessage: 'Thank you for testing PrinterBridge!',
-        logoBase64: _logoBase64, // Include logo if selected
-      );
+      final receiptData = _createPrimaryReceiptData();
       
       // For Zebra printers with stored dimensions, use enhanced printing with dynamic height
       if (_selectedBrand == PrinterBrand.zebra && _zebraDimensions != null) {
@@ -942,24 +953,8 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _testZebraReceiptPrint() async {
     debugPrint('🧾 Testing Zebra receipt on ${_selectedZebraPrinter?.friendlyName ?? "unknown model"}...');
     
-    // Create receipt-optimized data for ZD421
-    final receiptData = PrinterReceiptData(
-      storeName: 'ZD421 Receipt Test',
-      storeAddress: '456 Receipt Blvd, Zebra City',
-      storePhone: '(555) RECEIPT',
-      date: '12/19/2025',
-      time: '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
-      cashierName: 'ZD421 Tester',
-      receiptNumber: 'ZD-${DateTime.now().millisecondsSinceEpoch % 10000}',
-      laneNumber: 'ZD421',
-      receiptTitle: 'Store Receipt', // Test with different title for ZD421
-      items: [
-        PrinterLineItem(itemName: 'ZD421 Optimized Item 1', quantity: 1, unitPrice: 15.50, totalPrice: 15.50),
-        PrinterLineItem(itemName: 'ZD421 Optimized Item 2', quantity: 2, unitPrice: 7.25, totalPrice: 14.50),
-      ],
-      thankYouMessage: 'ZD421 Receipt Test Complete!',
-      logoBase64: _logoBase64, // Include logo if selected
-    );
+    // Use primary receipt data for consistency
+    final receiptData = _createPrimaryReceiptData();
     
     await _testReceiptPrintingWithData(receiptData);
   }
@@ -1110,24 +1105,8 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       debugPrint('🌟 Testing Star receipt printing with different paper widths...');
       
-      final receiptData = PrinterReceiptData(
-        storeName: 'Star Width Test Store',
-        storeAddress: 'Testing Different Paper Widths',
-        storePhone: '(555) STAR-TEST',
-        date: DateTime.now().toLocal().toString().split(' ')[0],
-        time: TimeOfDay.now().format(context),
-        cashierName: 'Width Tester',
-        receiptNumber: 'SW${DateTime.now().millisecondsSinceEpoch % 10000}',
-        laneNumber: '3',
-        receiptTitle: 'Store Receipt', // Test with all caps title
-        items: [
-          PrinterLineItem(itemName: '38mm Paper Test', quantity: 1, unitPrice: 34.5, totalPrice: 34.5),
-          PrinterLineItem(itemName: '58mm Paper Test', quantity: 1, unitPrice: 48.0, totalPrice: 48.0),
-          PrinterLineItem(itemName: '80mm Paper Test', quantity: 1, unitPrice: 72.0, totalPrice: 72.0),
-        ],
-        thankYouMessage: 'Current setting: ${_starPaperWidthMm}mm (${PrinterBridge.starConfig.printableAreaMm}mm printable)',
-        logoBase64: _logoBase64, // Include logo if selected
-      );
+      // Use primary receipt data for consistency
+      final receiptData = _createPrimaryReceiptData();
 
       // Store original width
       final originalWidth = PrinterBridge.starConfig.paperWidthMm;
