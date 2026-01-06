@@ -412,6 +412,13 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val footer = (details?.get("footer") as? String)?.trim().orEmpty()
         val receiptTitle = (details?.get("receiptTitle") as? String)?.trim() ?: "Receipt"  // Extract configurable receipt title
         
+        // Financial summary fields
+        val subtotal = (details?.get("subtotal") as? String)?.trim().orEmpty()
+        val discounts = (details?.get("discounts") as? String)?.trim().orEmpty()
+        val hst = (details?.get("hst") as? String)?.trim().orEmpty()
+        val gst = (details?.get("gst") as? String)?.trim().orEmpty()
+        val total = (details?.get("total") as? String)?.trim().orEmpty()
+        
         // Barcode
         val barcodeContent = (barcodeBlock?.get("content") as? String)?.trim().orEmpty()
         val barcodeSymbology = (barcodeBlock?.get("symbology") as? String)?.trim()?.lowercase() ?: "code128"
@@ -674,6 +681,40 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
               }
               printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
               printerBuilder.actionFeedLine(1)
+              
+              // Financial summary section
+              if (subtotal.isNotEmpty() || discounts.isNotEmpty() || hst.isNotEmpty() || gst.isNotEmpty() || total.isNotEmpty()) {
+                val leftFinancialWidth = (cpl * 5) / 8
+                val rightFinancialWidth = cpl - leftFinancialWidth
+                val leftFinancialParam = TextParameter().setWidth(leftFinancialWidth)
+                val rightFinancialParam = TextParameter().setWidth(rightFinancialWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+                
+                if (subtotal.isNotEmpty()) {
+                  printerBuilder.actionPrintText("Subtotal", leftFinancialParam)
+                  printerBuilder.actionPrintText("$$subtotal\n", rightFinancialParam)
+                }
+                if (discounts.isNotEmpty()) {
+                  printerBuilder.actionPrintText("Discounts", leftFinancialParam)
+                  printerBuilder.actionPrintText("-$$discounts\n", rightFinancialParam)
+                }
+                if (hst.isNotEmpty()) {
+                  printerBuilder.actionPrintText("HST", leftFinancialParam)
+                  printerBuilder.actionPrintText("$$hst\n", rightFinancialParam)
+                }
+                if (gst.isNotEmpty()) {
+                  printerBuilder.actionPrintText("GST", leftFinancialParam)
+                  printerBuilder.actionPrintText("$$gst\n", rightFinancialParam)
+                }
+                if (total.isNotEmpty()) {
+                  printerBuilder.actionPrintText("Total", leftFinancialParam)
+                  printerBuilder.actionPrintText("$$total\n", rightFinancialParam)
+                }
+                
+                // Third ruled line after financial summary
+                printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
+                printerBuilder.actionFeedLine(1)
+              }
+              
               if (footer.isNotEmpty()) {
                 printerBuilder.styleAlignment(Alignment.Center).actionPrintText("$footer\n").styleAlignment(Alignment.Left)
               }

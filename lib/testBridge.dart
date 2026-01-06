@@ -895,6 +895,12 @@ class _MyHomePageState extends State<MyHomePage> {
       ],
       thankYouMessage: 'Thank you for your purchase!',
       logoBase64: _logoBase64, // Include logo if selected
+      // Financial summary data
+      subtotal: 293.00,
+      discounts: 0.00,
+      hst: 29.30,
+      gst: 8.790,
+      total: 331.09,
     );
   }
 

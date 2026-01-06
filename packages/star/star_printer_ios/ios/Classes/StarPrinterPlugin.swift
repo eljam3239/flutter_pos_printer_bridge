@@ -523,6 +523,12 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let lane = (details?["lane"] as? String) ?? ""
     let footer = (details?["footer"] as? String) ?? ""
     let receiptTitle = (details?["receiptTitle"] as? String) ?? "Receipt"  // Extract configurable receipt title
+    // Financial summary details
+    let subtotal = (details?["subtotal"] as? String) ?? ""
+    let discounts = (details?["discounts"] as? String) ?? ""
+    let hst = (details?["hst"] as? String) ?? ""
+    let gst = (details?["gst"] as? String) ?? ""
+    let total = (details?["total"] as? String) ?? ""
     // Label-specific details
     let category = (details?["category"] as? String) ?? ""
     let size = (details?["size"] as? String) ?? ""
@@ -837,7 +843,41 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
 
                             // Second ruled line after items
                             _ = printerBuilder.actionPrintRuledLine(StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm))
-                            _ = printerBuilder.actionFeedLine(1)
+                            //_ = printerBuilder.actionFeedLine(1)
+                            
+                            // Financial summary section
+                            if !subtotal.isEmpty || !discounts.isEmpty || !hst.isEmpty || !gst.isEmpty || !total.isEmpty {
+                                let leftFinancialWidth = max(8, totalCPL / 2)
+                                let rightFinancialWidth = max(8, totalCPL - leftFinancialWidth)
+                                let leftFinancialParam = StarXpandCommand.Printer.TextParameter().setWidth(leftFinancialWidth)
+                                let rightFinancialParam = StarXpandCommand.Printer.TextParameter().setWidth(rightFinancialWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+                                
+                                if !subtotal.isEmpty {
+                                    _ = printerBuilder.actionPrintText("Subtotal", leftFinancialParam)
+                                    _ = printerBuilder.actionPrintText("$\(subtotal)\n", rightFinancialParam)
+                                }
+                                if !discounts.isEmpty {
+                                    _ = printerBuilder.actionPrintText("Discounts", leftFinancialParam)
+                                    _ = printerBuilder.actionPrintText("-$\(discounts)\n", rightFinancialParam)
+                                }
+                                if !hst.isEmpty {
+                                    _ = printerBuilder.actionPrintText("HST", leftFinancialParam)
+                                    _ = printerBuilder.actionPrintText("$\(hst)\n", rightFinancialParam)
+                                }
+                                if !gst.isEmpty {
+                                    _ = printerBuilder.actionPrintText("GST", leftFinancialParam)
+                                    _ = printerBuilder.actionPrintText("$\(gst)\n", rightFinancialParam)
+                                }
+                                if !total.isEmpty {
+                                    _ = printerBuilder.actionPrintText("Total", leftFinancialParam)
+                                    _ = printerBuilder.actionPrintText("$\(total)\n", rightFinancialParam)
+                                }
+                                
+                                // Third ruled line after financial summary
+                                _ = printerBuilder.actionPrintRuledLine(StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm))
+                                _ = printerBuilder.actionFeedLine(1)
+                            }
+                            
                             // Footer (centered) if present
                             if !footer.isEmpty {
                                 _ = printerBuilder

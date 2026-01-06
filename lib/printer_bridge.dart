@@ -107,6 +107,12 @@ class PrinterReceiptData {
   final String? logoBase64;
   final DateTime? transactionDate;
   final String receiptTitle; // New field for customizable receipt title
+  // Financial summary fields
+  final double? subtotal;
+  final double? discounts;
+  final double? hst;
+  final double? gst;
+  final double? total;
 
   PrinterReceiptData({
     required this.storeName,
@@ -122,6 +128,12 @@ class PrinterReceiptData {
     this.logoBase64,
     this.transactionDate,
     this.receiptTitle = 'Store Receipt',
+    // Financial summary parameters
+    this.subtotal,
+    this.discounts,
+    this.hst,
+    this.gst,
+    this.total,
   });
 
   /// Calculate total from all line items
@@ -1365,6 +1377,12 @@ class PrinterBridge {
             'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
             'printableAreaMm': printableAreaMm,
             'receiptTitle': receiptData.receiptTitle, // Pass the configurable receipt title
+            // Financial summary fields
+            'subtotal': receiptData.subtotal?.toStringAsFixed(2),
+            'discounts': receiptData.discounts?.toStringAsFixed(2), 
+            'hst': receiptData.hst?.toStringAsFixed(2),
+            'gst': receiptData.gst?.toStringAsFixed(2),
+            'total': receiptData.total?.toStringAsFixed(2),
           },
           'items': receiptData.items.map((item) => {
             'quantity': item.quantity.toString(),
