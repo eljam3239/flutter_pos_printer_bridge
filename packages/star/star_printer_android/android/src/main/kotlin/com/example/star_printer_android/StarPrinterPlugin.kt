@@ -641,6 +641,29 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
               }
               
+              // Return items section
+              val returnItemList = returnItems?.mapNotNull { it as? Map<*, *> } ?: emptyList()
+              if (returnItemList.isNotEmpty()) {
+                // Add whitespace
+                printerBuilder.actionFeedLine(1)
+                
+                // "Returns" header (left-aligned)
+                printerBuilder.actionPrintText("Returns\n")
+                
+                // Return item lines with manual padding
+                for (returnItem in returnItemList) {
+                  val qty = (returnItem["quantity"] as? String)?.trim().orEmpty()
+                  val name = (returnItem["name"] as? String)?.trim().orEmpty()
+                  val price = (returnItem["price"] as? String)?.trim().orEmpty()
+                  val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
+                  val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
+                  val totalLen = leftText.length + rightText.length
+                  val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                  val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
+                  printerBuilder.actionPrintText("$paddedLine\n")
+                }
+              }
+
               // Second ruled line and footer
               printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
               printerBuilder.actionFeedLine(1)
@@ -684,6 +707,33 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                   }
                 }
               }
+              
+              // Return items section
+              val returnItemList = returnItems?.mapNotNull { it as? Map<*, *> } ?: emptyList()
+              if (returnItemList.isNotEmpty()) {
+                // Add whitespace
+                printerBuilder.actionFeedLine(1)
+                
+                // "Returns" header (left-aligned)
+                printerBuilder.actionPrintText("Returns\n")
+                
+                // Return item lines using same width parameters as regular items
+                val leftItemsWidth = ((cpl * 5) / 8).coerceAtLeast(8)
+                val rightItemsWidth = (cpl - leftItemsWidth).coerceAtLeast(6)
+                val leftParam2 = TextParameter().setWidth(leftItemsWidth)
+                val rightParam2 = TextParameter().setWidth(rightItemsWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+                
+                for (returnItem in returnItemList) {
+                  val qty = (returnItem["quantity"] as? String)?.trim().orEmpty()
+                  val name = (returnItem["name"] as? String)?.trim().orEmpty()
+                  val price = (returnItem["price"] as? String)?.trim().orEmpty()
+                  val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
+                  val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
+                  printerBuilder.actionPrintText(leftText, leftParam2)
+                  printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                }
+              }
+              
               printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
               printerBuilder.actionFeedLine(1)
               

@@ -872,8 +872,10 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
                 try { Object ap = params.get("advancedProcessing"); if (ap != null) advancedProcessing = Boolean.parseBoolean(String.valueOf(ap)); } catch (Exception ignored) {}
                 String align = null; try { Object al = params.get("align"); if (al != null) align = String.valueOf(al); } catch (Exception ignored) {}
                 if (imagePath != null && !imagePath.isEmpty()) {
+                  System.out.println("DEBUG: Attempting to decode image from path: " + imagePath);
                   Bitmap bmp = BitmapFactory.decodeFile(imagePath);
                   if (bmp != null) {
+                    System.out.println("DEBUG: Image decoded successfully - width: " + bmp.getWidth() + ", height: " + bmp.getHeight());
                     int origW = bmp.getWidth();
                     int origH = bmp.getHeight();
                     int targetW = getInt(params.get("targetWidth"), origW);
@@ -922,8 +924,14 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
                     }
                     if (centerRequest) { try { mPrinter.addTextAlign(Printer.ALIGN_LEFT); } catch (Exception ignored) {} }
                     if (debug) { try { mPrinter.addText("[IMG_END w="+width+" h="+height+"]\n"); } catch (Exception ignored) {} }
-                  } else if (debug) {
-                    try { mPrinter.addText("[IMG_DECODE_FAILED]\n"); } catch (Exception ignored) {}
+                  } else {
+                    System.out.println("ERROR: Failed to decode image from path: " + imagePath);
+                    // Check if file exists
+                    java.io.File imageFile = new java.io.File(imagePath);
+                    System.out.println("DEBUG: File exists: " + imageFile.exists() + ", canRead: " + imageFile.canRead() + ", size: " + imageFile.length());
+                    if (debug) {
+                      try { mPrinter.addText("[IMG_DECODE_FAILED]\n"); } catch (Exception ignored) {}
+                    }
                   }
                 }
                 break;
