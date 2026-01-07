@@ -523,6 +523,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let lane = (details?["lane"] as? String) ?? ""
     let footer = (details?["footer"] as? String) ?? ""
     let receiptTitle = (details?["receiptTitle"] as? String) ?? "Receipt"  // Extract configurable receipt title
+    let isGiftReceipt = (details?["isGiftReceipt"] as? Bool) ?? false  // Extract gift receipt flag
     // Financial summary details
     let subtotal = (details?["subtotal"] as? String) ?? ""
     let discounts = (details?["discounts"] as? String) ?? ""
@@ -782,17 +783,26 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                             for item in items {
                                 let quantity = (item["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                 let name = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
-                                let price = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
                                 let repeatString = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                 let repeatCount = max(1, min(200, Int(repeatString) ?? 1))
                                 let leftText = "\(quantity) x \(name)"
-                                let rightText = "\(price)"
                                 
-                                for _ in 0..<repeatCount {
-                                    let totalLen = leftText.count + rightText.count
-                                    let spacesNeeded = max(1, 42 - totalLen)
-                                    let paddedLine = leftText + String(repeating: " ", count: spacesNeeded) + rightText
-                                    _ = printerBuilder.actionPrintText("\(paddedLine)\n")
+                                if isGiftReceipt {
+                                    // For gift receipts, only show quantity and name
+                                    for _ in 0..<repeatCount {
+                                        _ = printerBuilder.actionPrintText("\(leftText)\n")
+                                    }
+                                } else {
+                                    // For regular receipts, include price
+                                    let price = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                    let rightText = "\(price)"
+                                    
+                                    for _ in 0..<repeatCount {
+                                        let totalLen = leftText.count + rightText.count
+                                        let spacesNeeded = max(1, 42 - totalLen)
+                                        let paddedLine = leftText + String(repeating: " ", count: spacesNeeded) + rightText
+                                        _ = printerBuilder.actionPrintText("\(paddedLine)\n")
+                                    }
                                 }
                             }
                             
@@ -808,14 +818,21 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 for returnItem in returnItems {
                                     let quantity = (returnItem["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                     let name = (returnItem["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
-                                    let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
                                     let leftText = "\(quantity) x \(name)"
-                                    let rightText = "-\(price)" // Add negative prefix
                                     
-                                    let totalLen = leftText.count + rightText.count
-                                    let spacesNeeded = max(1, 42 - totalLen)
-                                    let paddedLine = leftText + String(repeating: " ", count: spacesNeeded) + rightText
-                                    _ = printerBuilder.actionPrintText("\(paddedLine)\n")
+                                    if isGiftReceipt {
+                                        // For gift receipts, only show quantity and name
+                                        _ = printerBuilder.actionPrintText("\(leftText)\n")
+                                    } else {
+                                        // For regular receipts, include price with negative prefix
+                                        let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                        let rightText = "-\(price)" // Add negative prefix
+                                        
+                                        let totalLen = leftText.count + rightText.count
+                                        let spacesNeeded = max(1, 42 - totalLen)
+                                        let paddedLine = leftText + String(repeating: " ", count: spacesNeeded) + rightText
+                                        _ = printerBuilder.actionPrintText("\(paddedLine)\n")
+                                    }
                                 }
                             }
                             
@@ -855,14 +872,23 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 for item in items {
                                     let qty = (item["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                     let name = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
-                                    let priceRaw = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
                                     let repeatRaw = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                     let repeatCount = Int(repeatRaw) ?? 1
                                     let leftText = "\(qty) x \(name)"
-                                    let rightText = "\(priceRaw)"
-                                    for _ in 0..<max(1, min(repeatCount, 200)) {
-                                        _ = printerBuilder.actionPrintText(leftText, leftParamItems)
-                                        _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
+                                    
+                                    if isGiftReceipt {
+                                        // For gift receipts, only show quantity and name
+                                        for _ in 0..<max(1, min(repeatCount, 200)) {
+                                            _ = printerBuilder.actionPrintText("\(leftText)\n")
+                                        }
+                                    } else {
+                                        // For regular receipts, include price
+                                        let priceRaw = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                        let rightText = "\(priceRaw)"
+                                        for _ in 0..<max(1, min(repeatCount, 200)) {
+                                            _ = printerBuilder.actionPrintText(leftText, leftParamItems)
+                                            _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
+                                        }
                                     }
                                 }
                             }
@@ -884,12 +910,19 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 for returnItem in returnItems {
                                     let quantity = (returnItem["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                     let name = (returnItem["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
-                                    let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
                                     let leftText = "\(quantity) x \(name)"
-                                    let rightText = "-\(price)" // Add negative prefix
                                     
-                                    _ = printerBuilder.actionPrintText(leftText, leftParamItems)
-                                    _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
+                                    if isGiftReceipt {
+                                        // For gift receipts, only show quantity and name
+                                        _ = printerBuilder.actionPrintText("\(leftText)\n")
+                                    } else {
+                                        // For regular receipts, include price with negative prefix
+                                        let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                        let rightText = "-\(price)" // Add negative prefix
+                                        
+                                        _ = printerBuilder.actionPrintText(leftText, leftParamItems)
+                                        _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
+                                    }
                                 }
                             }
 

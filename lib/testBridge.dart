@@ -407,6 +407,12 @@ class _MyHomePageState extends State<MyHomePage> {
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
                 ),
                 ElevatedButton.icon(
+                  onPressed: _isConnected ? _testGiftReceiptPrinting : null,
+                  icon: const Icon(Icons.card_giftcard),
+                  label: const Text('Test Gift Receipt'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.pink),
+                ),
+                ElevatedButton.icon(
                   onPressed: _isConnected ? _testLabelPrinting : null,
                   icon: const Icon(Icons.label),
                   label: const Text('Test Label Print'),
@@ -955,6 +961,66 @@ class _MyHomePageState extends State<MyHomePage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Receipt print error: $e')),
+      );
+    }
+  }
+
+  Future<void> _testGiftReceiptPrinting() async {
+    if (!_isConnected || _selectedPrinter == null) return;
+    
+    try {
+      debugPrint('🎁 Testing PrinterBridge.printReceipt with gift receipt mode...');
+      
+      final baseReceiptData = _createPrimaryReceiptData();
+      
+      // Create a new receipt data with gift receipt mode enabled
+      final receiptData = PrinterReceiptData(
+        storeName: baseReceiptData.storeName,
+        storeAddress: baseReceiptData.storeAddress,
+        storePhone: baseReceiptData.storePhone,
+        date: baseReceiptData.date,
+        time: baseReceiptData.time,
+        cashierName: baseReceiptData.cashierName,
+        receiptNumber: baseReceiptData.receiptNumber,
+        laneNumber: baseReceiptData.laneNumber,
+        items: baseReceiptData.items,
+        subtotal: baseReceiptData.subtotal,
+        discounts: baseReceiptData.discounts,
+        hst: baseReceiptData.hst,
+        gst: baseReceiptData.gst,
+        total: baseReceiptData.total,
+        payments: baseReceiptData.payments,
+        thankYouMessage: baseReceiptData.thankYouMessage,
+        logoBase64: baseReceiptData.logoBase64,
+        transactionDate: baseReceiptData.transactionDate,
+        receiptTitle: baseReceiptData.receiptTitle,
+        returnItems: baseReceiptData.returnItems,
+        isGiftReceipt: true, // Enable gift receipt mode
+      );
+      
+      // For Zebra printers with stored dimensions, use enhanced printing with dynamic height
+      if (_selectedBrand == PrinterBrand.zebra && _zebraDimensions != null) {
+        await _printZebraReceiptWithDynamicHeight(receiptData);
+      } else {
+        // For other brands or when dimensions not available, use standard PrinterBridge
+        final success = await PrinterBridge.printReceipt(_selectedPrinter!['brand']!, receiptData);
+        
+        debugPrint(success ? '✅ Gift receipt print successful' : '❌ Gift receipt print failed');
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Gift receipt printed successfully!' : 'Gift receipt print failed'),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+      }
+      
+    } catch (e) {
+      debugPrint('❌ Gift receipt print error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gift receipt print error: $e')),
       );
     }
   }

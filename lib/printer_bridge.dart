@@ -124,6 +124,7 @@ class PrinterReceiptData {
   final String? logoBase64;
   final DateTime? transactionDate;
   final String receiptTitle; // New field for customizable receipt title
+  final bool isGiftReceipt; // New field for gift receipt mode
   // Financial summary fields
   final double? subtotal;
   final double? discounts;
@@ -148,6 +149,7 @@ class PrinterReceiptData {
     this.logoBase64,
     this.transactionDate,
     this.receiptTitle = 'Store Receipt',
+    this.isGiftReceipt = false, // Default to regular receipt
     // Financial summary parameters
     this.subtotal,
     this.discounts,
@@ -917,6 +919,28 @@ class PrinterBridge {
       return qtyField + nameTrunc.padRight(nameWidth) + priceField;
     }
 
+    String qtyName(String qty, String name) {
+      // Layout for gift receipts: qty (3) name (left) - no price
+      qty = qty.trim();
+      name = name.trim();
+
+      // Adjust qty width for narrower paper
+      final qtyWidth = effectiveCharsPerLine >= 40 ? 4 : 3;
+      
+      final qtyStr = qty.length > (qtyWidth - 1)
+          ? qty.substring(0, qtyWidth - 1)
+          : qty;
+      final qtyField = (qtyStr + 'x').padRight(qtyWidth);
+
+      // Remaining width for name = total - qtyWidth (no price field for gift receipts)
+      final nameWidth = effectiveCharsPerLine - qtyWidth;
+      String nameTrunc = name;
+      if (nameTrunc.length > nameWidth)
+        nameTrunc = nameTrunc.substring(0, nameWidth);
+
+      return qtyField + nameTrunc;
+    }
+
     // Store title/header
     String title = receiptData.storeName.trim();
     if (title.isNotEmpty) {
@@ -1130,25 +1154,25 @@ class PrinterBridge {
       ),
     );
 
-    // Items - center each item line using SDK
+    // Items - center each item line using SDK for regular receipts, left-align for gift receipts
     for (final item in receiptData.items) {
       cmds.add(
         EpsonPrintCommand(
           type: EpsonCommandType.text,
-          parameters: {'align': 'center'},
+          parameters: {'align': receiptData.isGiftReceipt ? 'left' : 'center'},
         ),
       );
       cmds.add(
         EpsonPrintCommand(
           type: EpsonCommandType.text,
           parameters: {
-            'data':
-                qtyNamePrice(
-                  item.quantity.toString(),
-                  item.itemName,
-                  item.totalPrice.toStringAsFixed(2),
-                ) +
-                '\n',
+            'data': receiptData.isGiftReceipt
+                ? qtyName(item.quantity.toString(), item.itemName) + '\n'
+                : qtyNamePrice(
+                    item.quantity.toString(),
+                    item.itemName,
+                    item.totalPrice.toStringAsFixed(2),
+                  ) + '\n',
           },
         ),
       );
@@ -1175,22 +1199,24 @@ class PrinterBridge {
         ),
       );
       
-      // Print return items with negative prefix
+      // Print return items with negative prefix - center for regular receipts, left-align for gift receipts
       for (final returnItem in receiptData.returnItems!) {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'align': 'center'},
+            parameters: {'align': receiptData.isGiftReceipt ? 'left' : 'center'},
           ),
         );
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
             parameters: {
-              'data': leftRight(
-                '${returnItem.quantity} x ${returnItem.itemName}',
-                '-${returnItem.unitPrice.toStringAsFixed(2)}',
-              ) + '\n',
+              'data': receiptData.isGiftReceipt
+                  ? '${returnItem.quantity} x ${returnItem.itemName}\n'
+                  : leftRight(
+                      '${returnItem.quantity} x ${returnItem.itemName}',
+                      '-${returnItem.unitPrice.toStringAsFixed(2)}',
+                    ) + '\n',
             },
           ),
         );
@@ -1223,9 +1249,10 @@ class PrinterBridge {
       ),
     );
     
-    // Financial summary section
-    if (receiptData.subtotal != null || receiptData.discounts != null || 
-        receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
+    // Financial summary section (skip for gift receipts)
+    if (!receiptData.isGiftReceipt && 
+        (receiptData.subtotal != null || receiptData.discounts != null || 
+         receiptData.hst != null || receiptData.gst != null || receiptData.total != null)) {
       
       cmds.add(
         EpsonPrintCommand(
@@ -1606,25 +1633,30 @@ class PrinterBridge {
             'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
             'printableAreaMm': printableAreaMm,
             'receiptTitle': receiptData.receiptTitle, // Pass the configurable receipt title
-            // Financial summary fields
-            'subtotal': receiptData.subtotal?.toStringAsFixed(2),
-            'discounts': receiptData.discounts?.toStringAsFixed(2), 
-            'hst': receiptData.hst?.toStringAsFixed(2),
-            'gst': receiptData.gst?.toStringAsFixed(2),
-            'total': receiptData.total?.toStringAsFixed(2),
-            // Payment methods breakdown
-            'payments': receiptData.payments?.map((method, amount) => 
-              MapEntry(method, amount.toStringAsFixed(2))),
+            'isGiftReceipt': receiptData.isGiftReceipt, // Pass gift receipt flag to native layers
+            // Financial summary fields - only include if not a gift receipt
+            if (!receiptData.isGiftReceipt) ...{
+              'subtotal': receiptData.subtotal?.toStringAsFixed(2),
+              'discounts': receiptData.discounts?.toStringAsFixed(2), 
+              'hst': receiptData.hst?.toStringAsFixed(2),
+              'gst': receiptData.gst?.toStringAsFixed(2),
+              'total': receiptData.total?.toStringAsFixed(2),
+              // Payment methods breakdown
+              'payments': receiptData.payments?.map((method, amount) => 
+                MapEntry(method, amount.toStringAsFixed(2))),
+            },
           },
           'items': receiptData.items.map((item) => {
             'quantity': item.quantity.toString(),
             'name': item.itemName,
-            'price': item.unitPrice.toStringAsFixed(2),
+            // For gift receipts, exclude price information
+            if (!receiptData.isGiftReceipt) 'price': item.unitPrice.toStringAsFixed(2),
           }).toList(),
           'returnItems': receiptData.returnItems?.map((returnItem) => {
             'quantity': returnItem.quantity.toString(),
             'name': returnItem.itemName,
-            'price': returnItem.unitPrice.toStringAsFixed(2),
+            // For gift receipts, exclude price information
+            if (!receiptData.isGiftReceipt) 'price': returnItem.unitPrice.toStringAsFixed(2),
           }).toList(),
           'image': receiptData.logoBase64 == null
               ? null
@@ -1967,21 +1999,30 @@ $logoZpl^FS''';
     // Add line items dynamically
     int yPosition = 612;
     for (var item in receiptData.items) {
-      // Calculate right-aligned position for price
-      String priceText = "${item.unitPrice.toStringAsFixed(2)}";
-      int priceCharWidth = getCharWidthInDots(25, dpi);
-      int estimatedPriceWidth = priceText.length * priceCharWidth;
-      int priceX = (width - estimatedPriceWidth - 20); // 20 dot right margin
-      priceX = priceX.clamp(200, width - estimatedPriceWidth); // Ensure minimum left margin
-      
-      receiptZpl +=
-          '''
+      // For gift receipts, only show quantity and name, no price
+      if (receiptData.isGiftReceipt) {
+        receiptZpl +=
+            '''
+^CF0,25
+^FO20,$yPosition
+^FD${item.quantity} x ${item.itemName}^FS''';
+      } else {
+        // Calculate right-aligned position for price
+        String priceText = "${item.unitPrice.toStringAsFixed(2)}";
+        int priceCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedPriceWidth = priceText.length * priceCharWidth;
+        int priceX = (width - estimatedPriceWidth - 20); // 20 dot right margin
+        priceX = priceX.clamp(200, width - estimatedPriceWidth); // Ensure minimum left margin
+        
+        receiptZpl +=
+            '''
 ^CF0,25
 ^FO20,$yPosition
 ^FD${item.quantity} x ${item.itemName}^FS
 ^CF0,25
 ^FO$priceX,$yPosition
 ^FD$priceText^FS''';
+      }
       yPosition += 56; // Move down for next item
     }
 
@@ -1997,22 +2038,30 @@ $logoZpl^FS''';
 ^FDReturns^FS''';
       yPosition += 56; // Move down for return items
       
-      // Print return items with negative prefix
+      // Print return items with negative prefix (for regular receipts) or just name for gift receipts
       for (var returnItem in receiptData.returnItems!) {
-        // Calculate right-aligned position for negative price
-        String returnPriceText = "-${returnItem.unitPrice.toStringAsFixed(2)}";
-        int returnPriceCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedReturnPriceWidth = returnPriceText.length * returnPriceCharWidth;
-        int returnPriceX = (width - estimatedReturnPriceWidth - 20) - returnPriceCharWidth; // Shift left by one char to align decimal
-        returnPriceX = returnPriceX.clamp(200, width - estimatedReturnPriceWidth); // Ensure minimum left margin
-        
-        receiptZpl += '''
+        if (receiptData.isGiftReceipt) {
+          // For gift receipts, only show quantity and name, no price
+          receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FD${returnItem.quantity} x ${returnItem.itemName}^FS''';
+        } else {
+          // Calculate right-aligned position for negative price
+          String returnPriceText = "-${returnItem.unitPrice.toStringAsFixed(2)}";
+          int returnPriceCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedReturnPriceWidth = returnPriceText.length * returnPriceCharWidth;
+          int returnPriceX = (width - estimatedReturnPriceWidth - 20) - returnPriceCharWidth; // Shift left by one char to align decimal
+          returnPriceX = returnPriceX.clamp(200, width - estimatedReturnPriceWidth); // Ensure minimum left margin
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$yPosition
 ^FD${returnItem.quantity} x ${returnItem.itemName}^FS
 ^CF0,25
 ^FO$returnPriceX,$yPosition
 ^FD$returnPriceText^FS''';
+        }
         yPosition += 56; // Move down for next return item
       }
     }
@@ -2030,151 +2079,156 @@ $logoZpl^FS''';
     receiptZpl += '''
 ^FO20,$bottomLineY^GB$lineWidth,1,2,B,0^FS''';
 
-    // Financial summary section
-    int currentY = totalY;
-    if (receiptData.subtotal != null || receiptData.discounts != null || 
-        receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
-      
-      // Add each financial line with left-right alignment
-      if (receiptData.subtotal != null) {
-        String subtotalText = "${receiptData.subtotal!.toStringAsFixed(2)}";
-        int subtotalCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedSubtotalWidth = subtotalText.length * subtotalCharWidth;
-        int subtotalX = (width - estimatedSubtotalWidth - 20);
-        subtotalX = subtotalX.clamp(200, width - estimatedSubtotalWidth);
+    // Financial summary section - only include if not a gift receipt
+    if (!receiptData.isGiftReceipt) {
+      int currentY = totalY;
+      if (receiptData.subtotal != null || receiptData.discounts != null || 
+          receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
         
-        receiptZpl += '''
+        // Add each financial line with left-right alignment
+        if (receiptData.subtotal != null) {
+          String subtotalText = "${receiptData.subtotal!.toStringAsFixed(2)}";
+          int subtotalCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedSubtotalWidth = subtotalText.length * subtotalCharWidth;
+          int subtotalX = (width - estimatedSubtotalWidth - 20);
+          subtotalX = subtotalX.clamp(200, width - estimatedSubtotalWidth);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
 ^FDSubtotal^FS
 ^CF0,25
 ^FO$subtotalX,$currentY
 ^FD$subtotalText^FS''';
-        currentY += 40;
-      }
-      
-      if (receiptData.discounts != null) {
-        String discountText = "${receiptData.discounts!.toStringAsFixed(2)}";
-        int discountCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedDiscountWidth = discountText.length * discountCharWidth;
-        int discountX = (width - estimatedDiscountWidth - 20);
-        discountX = discountX.clamp(200, width - estimatedDiscountWidth);
+          currentY += 40;
+        }
         
-        receiptZpl += '''
+        if (receiptData.discounts != null) {
+          String discountText = "${receiptData.discounts!.toStringAsFixed(2)}";
+          int discountCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedDiscountWidth = discountText.length * discountCharWidth;
+          int discountX = (width - estimatedDiscountWidth - 20);
+          discountX = discountX.clamp(200, width - estimatedDiscountWidth);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
 ^FDDiscounts^FS
 ^CF0,25
 ^FO$discountX,$currentY
 ^FD$discountText^FS''';
-        currentY += 40;
-      }
-      
-      if (receiptData.hst != null && receiptData.hst! > 0) {
-        String hstText = "${receiptData.hst!.toStringAsFixed(2)}";
-        int hstCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedHstWidth = hstText.length * hstCharWidth;
-        int hstX = (width - estimatedHstWidth - 20);
-        hstX = hstX.clamp(200, width - estimatedHstWidth);
+          currentY += 40;
+        }
         
-        receiptZpl += '''
+        if (receiptData.hst != null && receiptData.hst! > 0) {
+          String hstText = "${receiptData.hst!.toStringAsFixed(2)}";
+          int hstCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedHstWidth = hstText.length * hstCharWidth;
+          int hstX = (width - estimatedHstWidth - 20);
+          hstX = hstX.clamp(200, width - estimatedHstWidth);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
 ^FDHST^FS
 ^CF0,25
 ^FO$hstX,$currentY
 ^FD$hstText^FS''';
-        currentY += 40;
-      }
-      
-      if (receiptData.gst != null && receiptData.gst! > 0) {
-        String gstText = "${receiptData.gst!.toStringAsFixed(2)}";
-        int gstCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedGstWidth = gstText.length * gstCharWidth;
-        int gstX = (width - estimatedGstWidth - 20);
-        gstX = gstX.clamp(200, width - estimatedGstWidth);
+          currentY += 40;
+        }
         
-        receiptZpl += '''
+        if (receiptData.gst != null && receiptData.gst! > 0) {
+          String gstText = "${receiptData.gst!.toStringAsFixed(2)}";
+          int gstCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedGstWidth = gstText.length * gstCharWidth;
+          int gstX = (width - estimatedGstWidth - 20);
+          gstX = gstX.clamp(200, width - estimatedGstWidth);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
 ^FDGST^FS
 ^CF0,25
 ^FO$gstX,$currentY
 ^FD$gstText^FS''';
-        currentY += 40;
-      }
-      
-      if (receiptData.total != null) {
-        String totalText = "${receiptData.total!.toStringAsFixed(2)}";
-        int totalCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedTotalWidth = totalText.length * totalCharWidth;
-        int totalX = (width - estimatedTotalWidth - 20);
-        totalX = totalX.clamp(200, width - estimatedTotalWidth);
+          currentY += 40;
+        }
         
-        receiptZpl += '''
+        if (receiptData.total != null) {
+          String totalText = "${receiptData.total!.toStringAsFixed(2)}";
+          int totalCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedTotalWidth = totalText.length * totalCharWidth;
+          int totalX = (width - estimatedTotalWidth - 20);
+          totalX = totalX.clamp(200, width - estimatedTotalWidth);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
 ^FDTotal^FS
 ^CF0,25
 ^FO$totalX,$currentY
 ^FD$totalText^FS''';
-        currentY += 40;
-      }
-      
-      // Add third horizontal line after financial summary
-      int thirdLineY = currentY + 20;
-      receiptZpl += '''
-^FO20,$thirdLineY^GB$lineWidth,1,2,B,0^FS''';
-      
-      // Update thank you position after financial summary
-      thankYouY = thirdLineY + 54;
-      
-      // Add payment methods section if payments exist
-      if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
-        int paymentY = thirdLineY + 54;
+          currentY += 40;
+        }
         
-        // Add centered "Payment Method" header
-        String paymentHeaderText = "Payment Method";
-        int paymentHeaderCharWidth = getCharWidthInDots(25, dpi);
-        int estimatedPaymentHeaderWidth = paymentHeaderText.length * paymentHeaderCharWidth;
-        int paymentHeaderX = (width - estimatedPaymentHeaderWidth) ~/ 2;
-        paymentHeaderX = paymentHeaderX.clamp(20, width - estimatedPaymentHeaderWidth - 20);
-        
+        // Add third horizontal line after financial summary
+        int thirdLineY = currentY + 20;
         receiptZpl += '''
+^FO20,$thirdLineY^GB$lineWidth,1,2,B,0^FS''';
+        
+        // Update thank you position after financial summary
+        thankYouY = thirdLineY + 54;
+        
+        // Add payment methods section if payments exist
+        if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
+          int paymentY = thirdLineY + 54;
+          
+          // Add centered "Payment Method" header
+          String paymentHeaderText = "Payment Method";
+          int paymentHeaderCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedPaymentHeaderWidth = paymentHeaderText.length * paymentHeaderCharWidth;
+          int paymentHeaderX = (width - estimatedPaymentHeaderWidth) ~/ 2;
+          paymentHeaderX = paymentHeaderX.clamp(20, width - estimatedPaymentHeaderWidth - 20);
+          
+          receiptZpl += '''
 ^CF0,25
 ^FO$paymentHeaderX,$paymentY
 ^FD$paymentHeaderText^FS''';
-        
-        paymentY += 40;
-        
-        // Add each payment method with left-right alignment
-        receiptData.payments!.forEach((method, amount) {
-          String amountText = "${amount.toStringAsFixed(2)}";
-          if (amount < 0) {
-            amountText = "-${(-amount).toStringAsFixed(2)}";
-          }
-          int amountCharWidth = getCharWidthInDots(25, dpi);
-          int estimatedAmountWidth = amountText.length * amountCharWidth;
-          int amountX = (width - estimatedAmountWidth - 20);
-          // For negative numbers, shift left by one character to align decimal points
-          if (amount < 0) {
-            amountX -= amountCharWidth;
-          }
-          amountX = amountX.clamp(200, width - estimatedAmountWidth);
           
-          receiptZpl += '''
+          paymentY += 40;
+          
+          // Add each payment method with left-right alignment
+          receiptData.payments!.forEach((method, amount) {
+            String amountText = "${amount.toStringAsFixed(2)}";
+            if (amount < 0) {
+              amountText = "-${(-amount).toStringAsFixed(2)}";
+            }
+            int amountCharWidth = getCharWidthInDots(25, dpi);
+            int estimatedAmountWidth = amountText.length * amountCharWidth;
+            int amountX = (width - estimatedAmountWidth - 20);
+            // For negative numbers, shift left by one character to align decimal points
+            if (amount < 0) {
+              amountX -= amountCharWidth;
+            }
+            amountX = amountX.clamp(200, width - estimatedAmountWidth);
+            
+            receiptZpl += '''
 ^CF0,25
 ^FO20,$paymentY
 ^FD$method^FS
 ^CF0,25
 ^FO$amountX,$paymentY
 ^FD$amountText^FS''';
-          paymentY += 40;
-        });
-        
-        // Update thank you position after payment methods
-        thankYouY = paymentY + 20;
+            paymentY += 40;
+          });
+          
+          // Update thank you position after payment methods
+          thankYouY = paymentY + 20;
+        }
       }
+    } else {
+      // For gift receipts, set thank you position closer to bottom line
+      thankYouY = bottomLineY + 54;
     }
 
     // Calculate minimum required height AFTER all dynamic content is added

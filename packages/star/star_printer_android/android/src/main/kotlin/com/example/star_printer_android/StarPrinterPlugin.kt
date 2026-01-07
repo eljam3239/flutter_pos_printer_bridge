@@ -412,6 +412,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val lane = (details?.get("lane") as? String)?.trim().orEmpty()
         val footer = (details?.get("footer") as? String)?.trim().orEmpty()
         val receiptTitle = (details?.get("receiptTitle") as? String)?.trim() ?: "Receipt"  // Extract configurable receipt title
+        val isGiftReceipt = (details?.get("isGiftReceipt") as? Boolean) ?: false  // Extract gift receipt flag
         
         // Financial summary fields
         val subtotal = (details?.get("subtotal") as? String)?.trim().orEmpty()
@@ -628,16 +629,25 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
               for (item in itemList) {
                 val qty = (item["quantity"] as? String)?.trim().orEmpty()
                 val name = (item["name"] as? String)?.trim().orEmpty()
-                val price = (item["price"] as? String)?.trim().orEmpty()
                 val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
                 val repeatN = repeatStr.toIntOrNull() ?: 1
                 val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
-                repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
-                  val totalLen = leftText.length + rightText.length
-                  val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
-                  val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
-                  printerBuilder.actionPrintText("$paddedLine\n")
+                
+                if (isGiftReceipt) {
+                  // For gift receipts, only show quantity and name
+                  repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+                    printerBuilder.actionPrintText("$leftText\n")
+                  }
+                } else {
+                  // For regular receipts, include price
+                  val price = (item["price"] as? String)?.trim().orEmpty()
+                  val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
+                  repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+                    val totalLen = leftText.length + rightText.length
+                    val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                    val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
+                    printerBuilder.actionPrintText("$paddedLine\n")
+                  }
                 }
               }
               
@@ -654,13 +664,20 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 for (returnItem in returnItemList) {
                   val qty = (returnItem["quantity"] as? String)?.trim().orEmpty()
                   val name = (returnItem["name"] as? String)?.trim().orEmpty()
-                  val price = (returnItem["price"] as? String)?.trim().orEmpty()
                   val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                  val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
-                  val totalLen = leftText.length + rightText.length
-                  val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
-                  val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
-                  printerBuilder.actionPrintText("$paddedLine\n")
+                  
+                  if (isGiftReceipt) {
+                    // For gift receipts, only show quantity and name
+                    printerBuilder.actionPrintText("$leftText\n")
+                  } else {
+                    // For regular receipts, include price with negative prefix
+                    val price = (returnItem["price"] as? String)?.trim().orEmpty()
+                    val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
+                    val totalLen = leftText.length + rightText.length
+                    val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
+                    val paddedLine = leftText + " ".repeat(spacesNeeded) + rightText
+                    printerBuilder.actionPrintText("$paddedLine\n")
+                  }
                 }
               }
 
@@ -696,14 +713,23 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 for (item in itemList) {
                   val qty = (item["quantity"] as? String)?.trim().orEmpty()
                   val name = (item["name"] as? String)?.trim().orEmpty()
-                  val price = (item["price"] as? String)?.trim().orEmpty()
                   val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
                   val repeatN = repeatStr.toIntOrNull() ?: 1
                   val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                  val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
-                  repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
-                    printerBuilder.actionPrintText(leftText, leftParam2)
-                    printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                  
+                  if (isGiftReceipt) {
+                    // For gift receipts, only show quantity and name
+                    repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+                      printerBuilder.actionPrintText("$leftText\n")
+                    }
+                  } else {
+                    // For regular receipts, include price
+                    val price = (item["price"] as? String)?.trim().orEmpty()
+                    val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
+                    repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+                      printerBuilder.actionPrintText(leftText, leftParam2)
+                      printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                    }
                   }
                 }
               }
@@ -726,11 +752,18 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 for (returnItem in returnItemList) {
                   val qty = (returnItem["quantity"] as? String)?.trim().orEmpty()
                   val name = (returnItem["name"] as? String)?.trim().orEmpty()
-                  val price = (returnItem["price"] as? String)?.trim().orEmpty()
                   val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                  val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
-                  printerBuilder.actionPrintText(leftText, leftParam2)
-                  printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                  
+                  if (isGiftReceipt) {
+                    // For gift receipts, only show quantity and name
+                    printerBuilder.actionPrintText("$leftText\n")
+                  } else {
+                    // For regular receipts, include price with negative prefix
+                    val price = (returnItem["price"] as? String)?.trim().orEmpty()
+                    val rightText = "-${if (price.isNotEmpty()) price else "0.00"}" // Add negative prefix
+                    printerBuilder.actionPrintText(leftText, leftParam2)
+                    printerBuilder.actionPrintText("$rightText\n", rightParam2)
+                  }
                 }
               }
               
