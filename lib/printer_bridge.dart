@@ -1666,7 +1666,7 @@ class PrinterBridge {
     // Format date and time
     final now = receiptData.transactionDate ?? DateTime.now();
     final formattedDate =
-        "${_getWeekday(now.weekday)} ${_getMonth(now.month)} ${now.day} ${now.hour}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}";
+        "${receiptData.date} ${now.hour}:${now.minute.toString().padLeft(2, '0')}"; //${now.hour >= 12 ? 'PM' : 'AM'}";
 
     // Helper function to get character width in dots based on font size and DPI
     int getCharWidthInDots(int fontSize, int dpi) {
@@ -1813,14 +1813,21 @@ $logoZpl^FS''';
     // Add line items dynamically
     int yPosition = 612;
     for (var item in receiptData.items) {
+      // Calculate right-aligned position for price
+      String priceText = "\$${item.unitPrice.toStringAsFixed(2)}";
+      int priceCharWidth = getCharWidthInDots(25, dpi);
+      int estimatedPriceWidth = priceText.length * priceCharWidth;
+      int priceX = (width - estimatedPriceWidth - 20); // 20 dot right margin
+      priceX = priceX.clamp(200, width - estimatedPriceWidth); // Ensure minimum left margin
+      
       receiptZpl +=
           '''
-^CF0,30
-^FO56,$yPosition
+^CF0,25
+^FO20,$yPosition
 ^FD${item.quantity} x ${item.itemName}^FS
-^CF0,30
-^FO470,$yPosition
-^FD\$${item.unitPrice.toStringAsFixed(2)}^FS''';
+^CF0,25
+^FO$priceX,$yPosition
+^FD$priceText^FS''';
       yPosition += 56; // Move down for next item
     }
 
