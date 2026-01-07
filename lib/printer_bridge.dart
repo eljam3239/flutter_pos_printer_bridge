@@ -1958,6 +1958,46 @@ $logoZpl^FS''';
       
       // Update thank you position after financial summary
       thankYouY = thirdLineY + 54;
+      
+      // Add payment methods section if payments exist
+      if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
+        int paymentY = thirdLineY + 54;
+        
+        // Add centered "Payment Method" header
+        String paymentHeaderText = "Payment Method";
+        int paymentHeaderCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedPaymentHeaderWidth = paymentHeaderText.length * paymentHeaderCharWidth;
+        int paymentHeaderX = (width - estimatedPaymentHeaderWidth) ~/ 2;
+        paymentHeaderX = paymentHeaderX.clamp(20, width - estimatedPaymentHeaderWidth - 20);
+        
+        receiptZpl += '''
+^CF0,25
+^FO$paymentHeaderX,$paymentY
+^FD$paymentHeaderText^FS''';
+        
+        paymentY += 40;
+        
+        // Add each payment method with left-right alignment
+        receiptData.payments!.forEach((method, amount) {
+          String amountText = "${amount.toStringAsFixed(2)}";
+          int amountCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedAmountWidth = amountText.length * amountCharWidth;
+          int amountX = (width - estimatedAmountWidth - 20);
+          amountX = amountX.clamp(200, width - estimatedAmountWidth);
+          
+          receiptZpl += '''
+^CF0,25
+^FO20,$paymentY
+^FD$method^FS
+^CF0,25
+^FO$amountX,$paymentY
+^FD$amountText^FS''';
+          paymentY += 40;
+        });
+        
+        // Update thank you position after payment methods
+        thankYouY = paymentY + 20;
+      }
     }
 
     // Add thank you message (centered) at dynamic position
