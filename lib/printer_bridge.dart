@@ -1230,6 +1230,39 @@ class PrinterBridge {
           parameters: {'align': 'left'},
         ),
       );
+      
+      // Payment methods section
+      if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
+        // Add centered "Payment Method" header
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'center'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': 'Payment Method\n'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'left'},
+          ),
+        );
+        
+        // Add each payment method with left-right alignment
+        receiptData.payments!.forEach((method, amount) {
+          cmds.add(
+            EpsonPrintCommand(
+              type: EpsonCommandType.text,
+              parameters: {'data': leftRight(method, '${amount.toStringAsFixed(2)}') + '\n'},
+            ),
+          );
+        });
+      }
     }
 
     // Footer message
