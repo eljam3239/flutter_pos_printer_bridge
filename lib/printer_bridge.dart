@@ -1143,6 +1143,91 @@ class PrinterBridge {
         parameters: {'align': 'left'},
       ),
     );
+    
+    // Financial summary section
+    if (receiptData.subtotal != null || receiptData.discounts != null || 
+        receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
+      
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'center'},
+        ),
+      );
+      
+      // Add each financial line with left-right alignment
+      if (receiptData.subtotal != null) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('Subtotal', '\$${receiptData.subtotal!.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
+      if (receiptData.discounts != null && receiptData.discounts! > 0) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('Discounts', '-\$${receiptData.discounts!.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
+      if (receiptData.hst != null && receiptData.hst! > 0) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('HST', '\$${receiptData.hst!.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
+      if (receiptData.gst != null && receiptData.gst! > 0) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('GST', '\$${receiptData.gst!.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
+      if (receiptData.total != null) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('Total', '\$${receiptData.total!.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'left'},
+        ),
+      );
+      
+      // Third horizontal line after financial summary
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'center'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'data': horizontalLine() + '\n'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'left'},
+        ),
+      );
+    }
 
     // Footer message
     if (receiptData.thankYouMessage != null &&
