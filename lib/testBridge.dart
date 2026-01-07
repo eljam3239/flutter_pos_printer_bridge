@@ -893,6 +893,13 @@ class _MyHomePageState extends State<MyHomePage> {
           totalPrice: 145.00,
         )
       ],
+      returnItems: [
+        PrinterReturnLineItem(
+          itemName: 'Alpine Fir Diffuser',
+          quantity: 1,
+          unitPrice: 38.00,
+        ),
+      ],
       thankYouMessage: 'Thank you for your purchase!',
       logoBase64: _logoBase64, // Include logo if selected
       // Financial summary data
@@ -903,7 +910,11 @@ class _MyHomePageState extends State<MyHomePage> {
       total: 331.09,
 
       //payment
-      payments: {'cash':304.30, 'credit':70.00},
+      payments: {
+        'Cash': 304.30, 
+        'Credit Card': 70.00,
+        'Store Credit': -38.00, // Return refund
+      },
     );
   }
 

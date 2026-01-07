@@ -92,6 +92,22 @@ class PrinterLineItem {
   });
 }
 
+/// Return line item for returns/refunds
+class PrinterReturnLineItem {
+  final String itemName;
+  final int quantity;
+  final double unitPrice; // Will be displayed as negative
+
+  PrinterReturnLineItem({
+    required this.itemName,
+    required this.quantity,
+    required this.unitPrice,
+  });
+  
+  /// Calculate total price for this return item (always negative)
+  double get totalPrice => -(quantity * unitPrice);
+}
+
 /// Universal receipt data class for all printer brands
 class PrinterReceiptData {
   final String storeName;
@@ -103,6 +119,7 @@ class PrinterReceiptData {
   final String? receiptNumber;
   final String? laneNumber;
   final List<PrinterLineItem> items;
+  final List<PrinterReturnLineItem>? returnItems;
   final String? thankYouMessage;
   final String? logoBase64;
   final DateTime? transactionDate;
@@ -126,6 +143,7 @@ class PrinterReceiptData {
     this.receiptNumber,
     this.laneNumber,
     required this.items,
+    this.returnItems,
     this.thankYouMessage,
     this.logoBase64,
     this.transactionDate,
@@ -1125,6 +1143,49 @@ class PrinterBridge {
           parameters: {'align': 'left'},
         ),
       );
+    }
+
+    // Return items section
+    if (receiptData.returnItems != null && receiptData.returnItems!.isNotEmpty) {
+      // Add whitespace
+      cmds.add(
+        EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+      );
+      
+      // "Returns" header (left-aligned)
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'data': 'Returns\n'},
+        ),
+      );
+      
+      // Print return items with negative prefix
+      for (final returnItem in receiptData.returnItems!) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'center'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {
+              'data': leftRight(
+                '${returnItem.quantity} x ${returnItem.itemName}',
+                '-${returnItem.unitPrice.toStringAsFixed(2)}',
+              ) + '\n',
+            },
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'left'},
+          ),
+        );
+      }
     }
 
     // Second horizontal line - center using SDK
