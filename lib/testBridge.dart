@@ -412,6 +412,12 @@ class _MyHomePageState extends State<MyHomePage> {
                   label: const Text('Test Label Print'),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
                 ),
+                ElevatedButton.icon(
+                  onPressed: _isConnected ? _testCashDrawer : null,
+                  icon: const Icon(Icons.account_balance_wallet),
+                  label: const Text('Open Cash Drawer'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.amber[700]),
+                ),
               ],
             ),
             
@@ -1023,6 +1029,36 @@ class _MyHomePageState extends State<MyHomePage> {
     );
     
     await _testLabelPrintingWithData(labelData);
+  }
+
+  Future<void> _testCashDrawer() async {
+    try {
+      debugPrint('💰 Testing cash drawer for $_selectedBrand...');
+      
+      final success = await PrinterBridge.openCashDrawer(_selectedPrinter!['brand']!);
+      
+      debugPrint(success ? '✅ Cash drawer opened successfully' : '❌ Cash drawer failed');
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success 
+              ? '💰 Cash drawer opened successfully' 
+              : '❌ Cash drawer failed'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    } catch (e) {
+      debugPrint('❌ Cash drawer test failed: $e');
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Cash drawer error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _testReceiptPrintingWithData(PrinterReceiptData receiptData) async {

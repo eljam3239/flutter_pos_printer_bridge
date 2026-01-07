@@ -780,6 +780,21 @@ class PrinterBridge {
     }
   }
 
+  /// Open cash drawer for the specified brand
+  /// Returns true if successful
+  static Future<bool> openCashDrawer(String brand) async {
+    switch (brand.toLowerCase()) {
+      case 'epson':
+        return _openEpsonCashDrawer();
+      case 'star':
+        return _openStarCashDrawer();
+      case 'zebra':
+        return _openZebraCashDrawer();
+      default:
+        throw ArgumentError('Unsupported brand: $brand');
+    }
+  }
+
   /// Disconnect from the connected printer of the specified brand
   /// Returns true if disconnect successful
   static Future<bool> disconnect(String brand) async {
@@ -1527,6 +1542,38 @@ class PrinterBridge {
       return true;
     } catch (e) {
       debugPrint('Zebra label print failed: $e');
+      return false;
+    }
+  }
+
+  // Cash drawer methods for each brand
+  static Future<bool> _openEpsonCashDrawer() async {
+    try {
+      await EpsonPrinter.openCashDrawer();
+      return true;
+    } catch (e) {
+      debugPrint('Epson cash drawer failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _openStarCashDrawer() async {
+    try {
+      await star.StarPrinter.openCashDrawer();
+      return true;
+    } catch (e) {
+      debugPrint('Star cash drawer failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> _openZebraCashDrawer() async {
+    try {
+      // TODO: Implement Zebra cash drawer support
+      debugPrint('Zebra cash drawer not yet implemented');
+      return false;
+    } catch (e) {
+      debugPrint('Zebra cash drawer failed: $e');
       return false;
     }
   }
