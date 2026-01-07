@@ -783,7 +783,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 let repeatString = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                 let repeatCount = max(1, min(200, Int(repeatString) ?? 1))
                                 let leftText = "\(quantity) x \(name)"
-                                let rightText = "$\(price)"
+                                let rightText = "\(price)"
                                 
                                 for _ in 0..<repeatCount {
                                     let totalLen = leftText.count + rightText.count
@@ -833,7 +833,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                     let repeatRaw = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                                     let repeatCount = Int(repeatRaw) ?? 1
                                     let leftText = "\(qty) x \(name)"
-                                    let rightText = "$\(priceRaw)"
+                                    let rightText = "\(priceRaw)"
                                     for _ in 0..<max(1, min(repeatCount, 200)) {
                                         _ = printerBuilder.actionPrintText(leftText, leftParamItems)
                                         _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
@@ -854,23 +854,23 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 
                                 if !subtotal.isEmpty {
                                     _ = printerBuilder.actionPrintText("Subtotal", leftFinancialParam)
-                                    _ = printerBuilder.actionPrintText("$\(subtotal)\n", rightFinancialParam)
+                                    _ = printerBuilder.actionPrintText("\(subtotal)\n", rightFinancialParam)
                                 }
                                 if !discounts.isEmpty {
                                     _ = printerBuilder.actionPrintText("Discounts", leftFinancialParam)
-                                    _ = printerBuilder.actionPrintText("-$\(discounts)\n", rightFinancialParam)
+                                    _ = printerBuilder.actionPrintText("\(discounts)\n", rightFinancialParam)
                                 }
                                 if !hst.isEmpty {
                                     _ = printerBuilder.actionPrintText("HST", leftFinancialParam)
-                                    _ = printerBuilder.actionPrintText("$\(hst)\n", rightFinancialParam)
+                                    _ = printerBuilder.actionPrintText("\(hst)\n", rightFinancialParam)
                                 }
                                 if !gst.isEmpty {
                                     _ = printerBuilder.actionPrintText("GST", leftFinancialParam)
-                                    _ = printerBuilder.actionPrintText("$\(gst)\n", rightFinancialParam)
+                                    _ = printerBuilder.actionPrintText("\(gst)\n", rightFinancialParam)
                                 }
                                 if !total.isEmpty {
                                     _ = printerBuilder.actionPrintText("Total", leftFinancialParam)
-                                    _ = printerBuilder.actionPrintText("$\(total)\n", rightFinancialParam)
+                                    _ = printerBuilder.actionPrintText("\(total)\n", rightFinancialParam)
                                 }
                                 
                                 // Third ruled line after financial summary
@@ -1527,7 +1527,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 let repeatRaw = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                 let repeatCount = Int(repeatRaw) ?? 1
                 let leftText = "\(qty) x \(name)"
-                let rightText = "$\(priceRaw)"
+                let rightText = "\(priceRaw)"
                 for _ in 0..<max(1, min(repeatCount, 200)) {
                     computedItemLines.append((leftText, rightText))
                 }

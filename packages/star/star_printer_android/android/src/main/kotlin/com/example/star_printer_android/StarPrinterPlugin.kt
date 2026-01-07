@@ -627,7 +627,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
                 val repeatN = repeatStr.toIntOrNull() ?: 1
                 val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                val rightText = if (price.isNotEmpty()) "$$price" else "$0.00"
+                val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
                 repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
                   val totalLen = leftText.length + rightText.length
                   val spacesNeeded = (42 - totalLen).coerceAtLeast(1)
@@ -672,7 +672,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                   val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
                   val repeatN = repeatStr.toIntOrNull() ?: 1
                   val leftText = listOf(qty.ifEmpty { "1" }, "x", name.ifEmpty { "Item" }).joinToString(" ")
-                  val rightText = if (price.isNotEmpty()) "$$price" else "$0.00"
+                  val rightText = if (price.isNotEmpty()) "$price" else "$0.00"
                   repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
                     printerBuilder.actionPrintText(leftText, leftParam2)
                     printerBuilder.actionPrintText("$rightText\n", rightParam2)
@@ -691,23 +691,23 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 
                 if (subtotal.isNotEmpty()) {
                   printerBuilder.actionPrintText("Subtotal", leftFinancialParam)
-                  printerBuilder.actionPrintText("$$subtotal\n", rightFinancialParam)
+                  printerBuilder.actionPrintText("$subtotal\n", rightFinancialParam)
                 }
                 if (discounts.isNotEmpty()) {
                   printerBuilder.actionPrintText("Discounts", leftFinancialParam)
-                  printerBuilder.actionPrintText("-$$discounts\n", rightFinancialParam)
+                  printerBuilder.actionPrintText("$discounts\n", rightFinancialParam)
                 }
                 if (hst.isNotEmpty()) {
                   printerBuilder.actionPrintText("HST", leftFinancialParam)
-                  printerBuilder.actionPrintText("$$hst\n", rightFinancialParam)
+                  printerBuilder.actionPrintText("$hst\n", rightFinancialParam)
                 }
                 if (gst.isNotEmpty()) {
                   printerBuilder.actionPrintText("GST", leftFinancialParam)
-                  printerBuilder.actionPrintText("$$gst\n", rightFinancialParam)
+                  printerBuilder.actionPrintText("$gst\n", rightFinancialParam)
                 }
                 if (total.isNotEmpty()) {
                   printerBuilder.actionPrintText("Total", leftFinancialParam)
-                  printerBuilder.actionPrintText("$$total\n", rightFinancialParam)
+                  printerBuilder.actionPrintText("$total\n", rightFinancialParam)
                 }
                 
                 // Third ruled line after financial summary
@@ -1400,7 +1400,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
       val repeatN = repeatStr.toIntOrNull() ?: 1
       val leftText = "$qty x $name"
-      val rightText = "$$priceRaw"
+      val rightText = "$priceRaw"
       repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
         parsedItems.add(Pair(leftText, rightText))
       }
