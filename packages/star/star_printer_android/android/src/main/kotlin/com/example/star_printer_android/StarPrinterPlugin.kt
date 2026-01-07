@@ -393,6 +393,7 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val imageBlock = layout?.get("image") as? Map<*, *>
         val details = layout?.get("details") as? Map<*, *>
   val items = layout?.get("items") as? List<*>
+  val returnItems = layout?.get("returnItems") as? List<*>
   val barcodeBlock = layout?.get("barcode") as? Map<*, *>
 
         val headerTitle = (header?.get("title") as? String)?.trim().orEmpty()

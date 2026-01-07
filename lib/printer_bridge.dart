@@ -1574,6 +1574,11 @@ class PrinterBridge {
             'name': item.itemName,
             'price': item.unitPrice.toStringAsFixed(2),
           }).toList(),
+          'returnItems': receiptData.returnItems?.map((returnItem) => {
+            'quantity': returnItem.quantity.toString(),
+            'name': returnItem.itemName,
+            'price': returnItem.unitPrice.toStringAsFixed(2),
+          }).toList(),
           'image': receiptData.logoBase64 == null
               ? null
               : {

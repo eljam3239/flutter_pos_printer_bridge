@@ -700,6 +700,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
 
                 // 2.6) Details block below the image/barcode
                 let items = (layout?["items"] as? [[String: Any]]) ?? []
+                let returnItems = (layout?["returnItems"] as? [[String: Any]]) ?? []
                 let hasAnyDetails = !locationText.isEmpty || !dateText.isEmpty || !timeText.isEmpty || !cashier.isEmpty || !receiptNum.isEmpty || !lane.isEmpty || !footer.isEmpty
                 print("DEBUG: hasAnyDetails=\(hasAnyDetails), locationText='\(locationText)', dateText='\(dateText)', timeText='\(timeText)', cashier='\(cashier)', receiptNum='\(receiptNum)', lane='\(lane)', footer='\(footer)'")
                 if hasAnyDetails {
@@ -795,6 +796,29 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 }
                             }
                             
+                            // Return items section
+                            if !returnItems.isEmpty {
+                                // Add whitespace
+                                _ = printerBuilder.actionFeedLine(1)
+                                
+                                // "Returns" header (left-aligned)
+                                _ = printerBuilder.actionPrintText("Returns\n")
+                                
+                                // Return item lines with manual padding
+                                for returnItem in returnItems {
+                                    let quantity = (returnItem["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
+                                    let name = (returnItem["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
+                                    let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                    let leftText = "\(quantity) x \(name)"
+                                    let rightText = "-\(price)" // Add negative prefix
+                                    
+                                    let totalLen = leftText.count + rightText.count
+                                    let spacesNeeded = max(1, 42 - totalLen)
+                                    let paddedLine = leftText + String(repeating: " ", count: spacesNeeded) + rightText
+                                    _ = printerBuilder.actionPrintText("\(paddedLine)\n")
+                                }
+                            }
+                            
                             // Second ruled line after items
                             _ = printerBuilder.actionPrintRuledLine(StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm))
                             _ = printerBuilder.actionFeedLine(1)
@@ -840,6 +864,32 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                         _ = printerBuilder.actionPrintText(leftText, leftParamItems)
                                         _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
                                     }
+                                }
+                            }
+                            
+                            // Return items section
+                            if !returnItems.isEmpty {
+                                // Add whitespace
+                                _ = printerBuilder.actionFeedLine(1)
+                                
+                                // "Returns" header (left-aligned)
+                                _ = printerBuilder.actionPrintText("Returns\n")
+                                
+                                // Return item lines using same width parameters as regular items
+                                let leftItemsWidth = max(8, Int(Double(totalCPL) * 0.625))
+                                let rightItemsWidth = max(6, totalCPL - leftItemsWidth)
+                                let leftParamItems = StarXpandCommand.Printer.TextParameter().setWidth(leftItemsWidth)
+                                let rightParamItems = StarXpandCommand.Printer.TextParameter().setWidth(rightItemsWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+                                
+                                for returnItem in returnItems {
+                                    let quantity = (returnItem["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
+                                    let name = (returnItem["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
+                                    let price = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                                    let leftText = "\(quantity) x \(name)"
+                                    let rightText = "-\(price)" // Add negative prefix
+                                    
+                                    _ = printerBuilder.actionPrintText(leftText, leftParamItems)
+                                    _ = printerBuilder.actionPrintText("\(rightText)\n", rightParamItems)
                                 }
                             }
 
