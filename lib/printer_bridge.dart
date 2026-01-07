@@ -113,6 +113,8 @@ class PrinterReceiptData {
   final double? hst;
   final double? gst;
   final double? total;
+  // Payment methods breakdown
+  final Map<String, num>? payments;
 
   PrinterReceiptData({
     required this.storeName,
@@ -134,6 +136,8 @@ class PrinterReceiptData {
     this.hst,
     this.gst,
     this.total,
+    // Payment methods parameter
+    this.payments,
   });
 
   /// Calculate total from all line items

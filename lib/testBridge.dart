@@ -901,6 +901,9 @@ class _MyHomePageState extends State<MyHomePage> {
       hst: 29.30,
       gst: 8.790,
       total: 331.09,
+
+      //payment
+      payments: {'cash':304.30, 'credit':70.00},
     );
   }
 
