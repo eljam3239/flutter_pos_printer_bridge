@@ -1841,19 +1841,8 @@ $logoZpl^FS''';
     int totalY = bottomLineY + 22; // Add spacing after bottom line
     int thankYouY = totalY + 54; // Add spacing after total
 
-    // Calculate minimum required height for the receipt
-    int minRequiredHeight = thankYouY + 60; // Add bottom margin
-
-    // Use the larger of the detected height or minimum required height
-    int actualReceiptHeight = height > minRequiredHeight
-        ? height
-        : minRequiredHeight;
-
     debugPrint(
-      '[PrinterBridge] Receipt layout - Last item Y: $yPosition, Total Y: $totalY, Thank you Y: $thankYouY',
-    );
-    debugPrint(
-      '[PrinterBridge] Receipt height - Detected: $height, Required: $minRequiredHeight, Using: $actualReceiptHeight',
+      '[PrinterBridge] Receipt layout - Last item Y: $yPosition, Total Y: $totalY, Initial thank you Y: $thankYouY',
     );
 
     // Add bottom line at dynamic position
@@ -1999,6 +1988,18 @@ $logoZpl^FS''';
         thankYouY = paymentY + 20;
       }
     }
+
+    // Calculate minimum required height AFTER all dynamic content is added
+    int minRequiredHeight = thankYouY + 60; // Add bottom margin
+
+    // Use the larger of the detected height or minimum required height
+    int actualReceiptHeight = height > minRequiredHeight
+        ? height
+        : minRequiredHeight;
+
+    debugPrint(
+      '[PrinterBridge] Receipt height - Final thank you Y: $thankYouY, Required: $minRequiredHeight, Using: $actualReceiptHeight',
+    );
 
     // Add thank you message (centered) at dynamic position
     String thankYouMsg =
