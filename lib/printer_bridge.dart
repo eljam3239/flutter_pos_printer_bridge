@@ -1807,14 +1807,15 @@ $logoZpl^FS''';
     }
 
     // Add separator line
+    int lineWidth = width - 40; // 20 dot margin on each side
     receiptZpl += '''
-^FO44,574^GB554,1,2,B,0^FS''';
+^FO20,574^GB$lineWidth,1,2,B,0^FS''';
 
     // Add line items dynamically
     int yPosition = 612;
     for (var item in receiptData.items) {
       // Calculate right-aligned position for price
-      String priceText = "\$${item.unitPrice.toStringAsFixed(2)}";
+      String priceText = "${item.unitPrice.toStringAsFixed(2)}";
       int priceCharWidth = getCharWidthInDots(25, dpi);
       int estimatedPriceWidth = priceText.length * priceCharWidth;
       int priceX = (width - estimatedPriceWidth - 20); // 20 dot right margin
@@ -1853,21 +1854,107 @@ $logoZpl^FS''';
 
     // Add bottom line at dynamic position
     receiptZpl += '''
-^FO44,$bottomLineY^GB554,1,2,B,0^FS''';
+^FO20,$bottomLineY^GB$lineWidth,1,2,B,0^FS''';
 
-    // Add total (centered) at dynamic position
-    final total = receiptData.calculatedTotal;
-    int totalCharWidth = getCharWidthInDots(35, dpi);
-    String totalText = "Total: \$${total.toStringAsFixed(2)}";
-    int estimatedTotalWidth = totalText.length * totalCharWidth;
-    int totalX = (width - estimatedTotalWidth) ~/ 2;
-    totalX = totalX.clamp(20, width - estimatedTotalWidth - 20); // Add margins
-
-    receiptZpl +=
-        '''
-^CF0,35
-^FO$totalX,$totalY
+    // Financial summary section
+    int currentY = totalY;
+    if (receiptData.subtotal != null || receiptData.discounts != null || 
+        receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
+      
+      // Add each financial line with left-right alignment
+      if (receiptData.subtotal != null) {
+        String subtotalText = "${receiptData.subtotal!.toStringAsFixed(2)}";
+        int subtotalCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedSubtotalWidth = subtotalText.length * subtotalCharWidth;
+        int subtotalX = (width - estimatedSubtotalWidth - 20);
+        subtotalX = subtotalX.clamp(200, width - estimatedSubtotalWidth);
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FDSubtotal^FS
+^CF0,25
+^FO$subtotalX,$currentY
+^FD$subtotalText^FS''';
+        currentY += 40;
+      }
+      
+      if (receiptData.discounts != null) {
+        String discountText = "${receiptData.discounts!.toStringAsFixed(2)}";
+        int discountCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedDiscountWidth = discountText.length * discountCharWidth;
+        int discountX = (width - estimatedDiscountWidth - 20);
+        discountX = discountX.clamp(200, width - estimatedDiscountWidth);
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FDDiscounts^FS
+^CF0,25
+^FO$discountX,$currentY
+^FD$discountText^FS''';
+        currentY += 40;
+      }
+      
+      if (receiptData.hst != null && receiptData.hst! > 0) {
+        String hstText = "${receiptData.hst!.toStringAsFixed(2)}";
+        int hstCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedHstWidth = hstText.length * hstCharWidth;
+        int hstX = (width - estimatedHstWidth - 20);
+        hstX = hstX.clamp(200, width - estimatedHstWidth);
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FDHST^FS
+^CF0,25
+^FO$hstX,$currentY
+^FD$hstText^FS''';
+        currentY += 40;
+      }
+      
+      if (receiptData.gst != null && receiptData.gst! > 0) {
+        String gstText = "${receiptData.gst!.toStringAsFixed(2)}";
+        int gstCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedGstWidth = gstText.length * gstCharWidth;
+        int gstX = (width - estimatedGstWidth - 20);
+        gstX = gstX.clamp(200, width - estimatedGstWidth);
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FDGST^FS
+^CF0,25
+^FO$gstX,$currentY
+^FD$gstText^FS''';
+        currentY += 40;
+      }
+      
+      if (receiptData.total != null) {
+        String totalText = "${receiptData.total!.toStringAsFixed(2)}";
+        int totalCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedTotalWidth = totalText.length * totalCharWidth;
+        int totalX = (width - estimatedTotalWidth - 20);
+        totalX = totalX.clamp(200, width - estimatedTotalWidth);
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FDTotal^FS
+^CF0,25
+^FO$totalX,$currentY
 ^FD$totalText^FS''';
+        currentY += 40;
+      }
+      
+      // Add third horizontal line after financial summary
+      int thirdLineY = currentY + 20;
+      receiptZpl += '''
+^FO20,$thirdLineY^GB$lineWidth,1,2,B,0^FS''';
+      
+      // Update thank you position after financial summary
+      thankYouY = thirdLineY + 54;
+    }
 
     // Add thank you message (centered) at dynamic position
     String thankYouMsg =
