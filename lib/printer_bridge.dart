@@ -874,9 +874,8 @@ class PrinterBridge {
       if (nameTrunc.length > nameWidth)
         nameTrunc = nameTrunc.substring(0, nameWidth);
 
-      // Ensure price has '$' prefix
-      final formattedPrice = price.startsWith('\$') ? price : '\$$price';
-      final priceField = formattedPrice.padLeft(priceWidth);
+      // final formattedPrice = price.startsWith('\$') ? price : '\$$price';
+      final priceField = price.padLeft(priceWidth);
 
       return qtyField + nameTrunc.padRight(nameWidth) + priceField;
     }
@@ -1160,16 +1159,16 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Subtotal', '\$${receiptData.subtotal!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('Subtotal', '${receiptData.subtotal!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
       
-      if (receiptData.discounts != null && receiptData.discounts! > 0) {
+      if (receiptData.discounts != null){ //} && receiptData.discounts! > 0) {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Discounts', '-\$${receiptData.discounts!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('Discounts', '${receiptData.discounts!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
@@ -1178,7 +1177,7 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('HST', '\$${receiptData.hst!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('HST', '${receiptData.hst!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
@@ -1187,7 +1186,7 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('GST', '\$${receiptData.gst!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('GST', '${receiptData.gst!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
@@ -1196,7 +1195,7 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Total', '\$${receiptData.total!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('Total', '${receiptData.total!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
