@@ -1933,6 +1933,38 @@ $logoZpl^FS''';
       yPosition += 56; // Move down for next item
     }
 
+    // Return items section
+    if (receiptData.returnItems != null && receiptData.returnItems!.isNotEmpty) {
+      // Add whitespace
+      yPosition += 28; // Half spacing for whitespace
+      
+      // "Returns" header (left-aligned)
+      receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FDReturns^FS''';
+      yPosition += 56; // Move down for return items
+      
+      // Print return items with negative prefix
+      for (var returnItem in receiptData.returnItems!) {
+        // Calculate right-aligned position for negative price
+        String returnPriceText = "-${returnItem.unitPrice.toStringAsFixed(2)}";
+        int returnPriceCharWidth = getCharWidthInDots(25, dpi);
+        int estimatedReturnPriceWidth = returnPriceText.length * returnPriceCharWidth;
+        int returnPriceX = (width - estimatedReturnPriceWidth - 20) - returnPriceCharWidth; // Shift left by one char to align decimal
+        returnPriceX = returnPriceX.clamp(200, width - estimatedReturnPriceWidth); // Ensure minimum left margin
+        
+        receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FD${returnItem.quantity} x ${returnItem.itemName}^FS
+^CF0,25
+^FO$returnPriceX,$yPosition
+^FD$returnPriceText^FS''';
+        yPosition += 56; // Move down for next return item
+      }
+    }
+
     // Calculate positions for bottom elements after line items
     int bottomLineY = yPosition + 20; // Add some spacing after last item
     int totalY = bottomLineY + 22; // Add spacing after bottom line
@@ -2066,9 +2098,16 @@ $logoZpl^FS''';
         // Add each payment method with left-right alignment
         receiptData.payments!.forEach((method, amount) {
           String amountText = "${amount.toStringAsFixed(2)}";
+          if (amount < 0) {
+            amountText = "-${(-amount).toStringAsFixed(2)}";
+          }
           int amountCharWidth = getCharWidthInDots(25, dpi);
           int estimatedAmountWidth = amountText.length * amountCharWidth;
           int amountX = (width - estimatedAmountWidth - 20);
+          // For negative numbers, shift left by one character to align decimal points
+          if (amount < 0) {
+            amountX -= amountCharWidth;
+          }
           amountX = amountX.clamp(200, width - estimatedAmountWidth);
           
           receiptZpl += '''
