@@ -529,6 +529,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     let hst = (details?["hst"] as? String) ?? ""
     let gst = (details?["gst"] as? String) ?? ""
     let total = (details?["total"] as? String) ?? ""
+    // Payment methods breakdown
+    let payments = details?["payments"] as? [String: String] ?? [:]
     // Label-specific details
     let category = (details?["category"] as? String) ?? ""
     let size = (details?["size"] as? String) ?? ""
@@ -876,6 +878,21 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                 // Third ruled line after financial summary
                                 _ = printerBuilder.actionPrintRuledLine(StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm))
                                 _ = printerBuilder.actionFeedLine(1)
+                                
+                                // Payment methods section
+                                if !payments.isEmpty {
+                                    // Centered "Payment Method" header
+                                    _ = printerBuilder
+                                        .styleAlignment(.center)
+                                        .actionPrintText("Payment Method\n")
+                                        .styleAlignment(.left)
+                                    
+                                    // Each payment method with left-right alignment
+                                    for (method, amount) in payments {
+                                        _ = printerBuilder.actionPrintText(method, leftFinancialParam)
+                                        _ = printerBuilder.actionPrintText("$\(amount)\n", rightFinancialParam)
+                                    }
+                                }
                             }
                             
                             // Footer (centered) if present

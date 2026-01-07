@@ -419,6 +419,10 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val gst = (details?.get("gst") as? String)?.trim().orEmpty()
         val total = (details?.get("total") as? String)?.trim().orEmpty()
         
+        // Payment methods breakdown
+        @Suppress("UNCHECKED_CAST")
+        val payments = (details?.get("payments") as? Map<String, String>)?.filterValues { it.isNotEmpty() } ?: emptyMap()
+        
         // Barcode
         val barcodeContent = (barcodeBlock?.get("content") as? String)?.trim().orEmpty()
         val barcodeSymbology = (barcodeBlock?.get("symbology") as? String)?.trim()?.lowercase() ?: "code128"
@@ -713,6 +717,20 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 // Third ruled line after financial summary
                 printerBuilder.actionPrintRuledLine(RuledLineParameter(fullWidthMm))
                 printerBuilder.actionFeedLine(1)
+                
+                // Payment methods section
+                if (payments.isNotEmpty()) {
+                  // Centered "Payment Method" header
+                  printerBuilder.styleAlignment(Alignment.Center)
+                    .actionPrintText("Payment Method\n")
+                    .styleAlignment(Alignment.Left)
+                  
+                  // Each payment method with left-right alignment
+                  for ((method, amount) in payments) {
+                    printerBuilder.actionPrintText(method, leftFinancialParam)
+                    printerBuilder.actionPrintText("$$amount\n", rightFinancialParam)
+                  }
+                }
               }
               
               if (footer.isNotEmpty()) {

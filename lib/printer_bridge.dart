@@ -1504,6 +1504,9 @@ class PrinterBridge {
             'hst': receiptData.hst?.toStringAsFixed(2),
             'gst': receiptData.gst?.toStringAsFixed(2),
             'total': receiptData.total?.toStringAsFixed(2),
+            // Payment methods breakdown
+            'payments': receiptData.payments?.map((method, amount) => 
+              MapEntry(method, amount.toStringAsFixed(2))),
           },
           'items': receiptData.items.map((item) => {
             'quantity': item.quantity.toString(),
