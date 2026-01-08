@@ -577,7 +577,53 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           if (graphicsOnly) {
             // Force label printers to use targetDots for proper width like iOS
             val detailsCanvas = targetDots
-            val detailsBmp = createDetailsBitmap(locationText, dateText, timeText, cashier, receiptNum, lane, footer, items, detailsCanvas, receiptTitle)
+            // Parse items for graphics-only printing
+            val parsedItems = items?.mapNotNull { item ->
+              val itemMap = item as? Map<*, *>
+              if (itemMap != null) {
+                val name = (itemMap["name"] as? String)?.trim().orEmpty()
+                val priceStr = (itemMap["price"] as? String)?.trim().orEmpty()
+                val quantityStr = (itemMap["quantity"] as? String)?.trim().orEmpty()
+                mapOf("name" to name, "price" to priceStr, "quantity" to quantityStr)
+              } else null
+            } ?: emptyList()
+            
+            val parsedReturnItems = returnItems?.mapNotNull { item ->
+              val itemMap = item as? Map<*, *>
+              if (itemMap != null) {
+                val name = (itemMap["name"] as? String)?.trim().orEmpty()
+                val priceStr = (itemMap["price"] as? String)?.trim().orEmpty()
+                val quantityStr = (itemMap["quantity"] as? String)?.trim().orEmpty()
+                mapOf("name" to name, "price" to priceStr, "quantity" to quantityStr)
+              } else null
+            } ?: emptyList()
+            
+            // Convert payments map to list of maps for graphics-only printer
+            val paymentsList = payments.map { (method, amount) ->
+              mapOf("method" to method, "amount" to amount)
+            }
+            
+            val detailsBmp = createDetailsBitmap(
+              storeInfo = mapOf("location" to locationText),
+              orderInfo = mapOf(
+                "date" to dateText,
+                "time" to timeText,
+                "cashier" to cashier,
+                "receiptNum" to receiptNum,
+                "lane" to lane,
+                "footer" to footer,
+                "receiptTitle" to receiptTitle
+              ),
+              items = parsedItems,
+              returnItems = parsedReturnItems,
+              subtotal = subtotal,
+              discounts = discounts,
+              hst = hst,
+              gst = gst,
+              total = total,
+              payments = paymentsList,
+              isGiftReceipt = isGiftReceipt
+            )
             if (detailsBmp != null) {
               printerBuilder.actionPrintImage(ImageParameter(detailsBmp, detailsCanvas)).actionFeedLine(1)
             }
@@ -1428,8 +1474,16 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     lane: String,
     footer: String,
     items: List<*>?,
+    returnItems: List<*>? = null,
+    subtotal: String = "",
+    discounts: String = "",
+    hst: String = "",
+    gst: String = "",
+    total: String = "",
+    payments: Map<String, String> = emptyMap(),
     canvasWidth: Int,
-    receiptTitle: String = "Receipt"  // Add receiptTitle parameter with default
+    receiptTitle: String = "Receipt",
+    isGiftReceipt: Boolean = false
   ): Bitmap? {
     val width = canvasWidth.coerceIn(8, 576)
     val padding = 20
@@ -1498,17 +1552,44 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     items?.mapNotNull { it as? Map<*, *> }?.forEach { item ->
       val qty = (item["quantity"] as? String)?.trim().orEmpty().ifEmpty { "1" }
       val name = (item["name"] as? String)?.trim().orEmpty().ifEmpty { "Item" }
-      val priceRaw = (item["price"] as? String)?.trim().orEmpty().ifEmpty { "0.00" }
       val repeatStr = (item["repeat"] as? String)?.trim().orEmpty()
       val repeatN = repeatStr.toIntOrNull() ?: 1
       val leftText = "$qty x $name"
-      val rightText = "$priceRaw"
-      repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
-        parsedItems.add(Pair(leftText, rightText))
+      
+      if (isGiftReceipt) {
+        // For gift receipts, only show quantity and name (no price)
+        repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+          parsedItems.add(Pair(leftText, ""))
+        }
+      } else {
+        // For regular receipts, include price
+        val priceRaw = (item["price"] as? String)?.trim().orEmpty().ifEmpty { "0.00" }
+        val rightText = "$priceRaw"
+        repeat(repeatN.coerceAtLeast(1).coerceAtMost(200)) {
+          parsedItems.add(Pair(leftText, rightText))
+        }
+      }
+    }
+    
+    // Prepare return items (if any) for graphics-only rendering
+    val parsedReturnItems = mutableListOf<Pair<String,String>>()
+    returnItems?.mapNotNull { it as? Map<*, *> }?.forEach { returnItem ->
+      val qty = (returnItem["quantity"] as? String)?.trim().orEmpty().ifEmpty { "1" }
+      val name = (returnItem["name"] as? String)?.trim().orEmpty().ifEmpty { "Item" }
+      val leftText = "$qty x $name"
+      
+      if (isGiftReceipt) {
+        // For gift receipts, only show quantity and name (no price)
+        parsedReturnItems.add(Pair(leftText, ""))
+      } else {
+        // For regular receipts, include negative price
+        val priceRaw = (returnItem["price"] as? String)?.trim().orEmpty().ifEmpty { "0.00" }
+        val rightText = "-$priceRaw"
+        parsedReturnItems.add(Pair(leftText, rightText))
       }
     }
 
-    // Reserve space: gap + first line + items + second line + gap after second line
+    // Reserve space: gap + first line + items + return items + second line + financial + payments + third line + gap after
     val gapBeforeLinesPx = (bodyPaint.textSize).toInt()
     val lineThicknessPx = 4
     val interItemLineSpacing = 8
@@ -1518,7 +1599,40 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       val lineHeight = (bodyPaint.textSize + 4).toInt()
       itemsBlockHeight = parsedItems.size * (lineHeight + interItemLineSpacing)
     }
-    totalHeight += gapBeforeLinesPx + lineThicknessPx + itemsBlockHeight + lineThicknessPx + gapAfterSecondLinePx
+    
+    // Return items height calculation
+    var returnItemsBlockHeight = 0
+    if (parsedReturnItems.isNotEmpty()) {
+      val lineHeight = (bodyPaint.textSize + 4).toInt()
+      val headerHeight = lineHeight + interItemLineSpacing // "Returns" header
+      val itemsHeight = parsedReturnItems.size * (lineHeight + interItemLineSpacing)
+      returnItemsBlockHeight = headerHeight + itemsHeight + 10 // extra spacing before return items
+    }
+    
+    totalHeight += gapBeforeLinesPx + lineThicknessPx + itemsBlockHeight + returnItemsBlockHeight + lineThicknessPx + gapAfterSecondLinePx
+
+    // Financial section height calculation - only include if not a gift receipt
+    if (!isGiftReceipt) {
+      val financialItems = mutableListOf<Pair<String, String>>()
+      if (subtotal.isNotEmpty()) financialItems.add(Pair("Subtotal", subtotal))
+      if (discounts.isNotEmpty()) financialItems.add(Pair("Discounts", discounts))
+      if (hst.isNotEmpty() && hst != "0.00") financialItems.add(Pair("HST", hst))
+      if (gst.isNotEmpty() && gst != "0.00") financialItems.add(Pair("GST", gst))
+      if (total.isNotEmpty()) financialItems.add(Pair("Total", total))
+      
+      if (financialItems.isNotEmpty()) {
+        val lineHeight = (bodyPaint.textSize + 4).toInt()
+        totalHeight += financialItems.size * (lineHeight + interItemLineSpacing)
+        totalHeight += 10 + lineThicknessPx + 10 // spacing + third line + spacing after
+        
+        // Payment methods height
+        if (payments.isNotEmpty()) {
+          val headerHeight = lineHeight + 8 // "Payment Method" header
+          val paymentsHeight = payments.size * (lineHeight + interItemLineSpacing)
+          totalHeight += headerHeight + paymentsHeight + 10 // extra spacing
+        }
+      }
+    }
 
     val footerLayout = if (footer.isNotEmpty()) buildLayout(footer, bodyPaint, Layout.Alignment.ALIGN_CENTER) else null
     if (footerLayout != null) {
@@ -1619,9 +1733,65 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         canvas.translate(leftXText.toFloat(), y.toFloat())
         leftLayout.draw(canvas)
         canvas.restore()
-        // Right text (single line) aligned right
-        val priceY = y + bodyPaint.textSize
-        canvas.drawText(r, (rightXText + rightColWidth).toFloat(), priceY - 6, textPaintRight)
+        // Right text (single line) aligned right - only if not empty
+        if (r.isNotEmpty()) {
+          val priceY = y + bodyPaint.textSize
+          canvas.drawText(r, (rightXText + rightColWidth).toFloat(), priceY - 6, textPaintRight)
+        }
+        val lineH = leftLayout.height.coerceAtLeast(bodyPaint.textSize.toInt()) + interItemLineSpacing
+        y += lineH
+      }
+    }
+
+    // Draw return items if present
+    if (parsedReturnItems.isNotEmpty()) {
+      y += 10 // extra spacing before return items
+      
+      // "Returns" header
+      val headerLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        StaticLayout.Builder.obtain("Returns", 0, "Returns".length, bodyPaint, width - padding * 2)
+          .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+          .setIncludePad(false)
+          .build()
+      } else {
+        @Suppress("DEPRECATION")
+        StaticLayout("Returns", bodyPaint, width - padding * 2, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0f, false)
+      }
+      canvas.save()
+      canvas.translate(padding.toFloat(), y.toFloat())
+      headerLayout.draw(canvas)
+      canvas.restore()
+      y += headerLayout.height + interItemLineSpacing
+      
+      // Draw return items
+      val availableWidth = (width - padding * 2)
+      val leftColWidth = (availableWidth * 0.65).toInt()
+      val rightColWidth = availableWidth - leftColWidth
+      val leftXText = padding
+      val rightXText = padding + leftColWidth
+      val textPaintLeft = TextPaint(bodyPaint)
+      val textPaintRight = TextPaint(bodyPaint)
+      textPaintRight.textAlign = android.graphics.Paint.Align.RIGHT
+      
+      parsedReturnItems.forEach { (l, r) ->
+        val leftLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+          StaticLayout.Builder.obtain(l, 0, l.length, textPaintLeft, leftColWidth)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setIncludePad(false)
+            .build()
+        } else {
+          @Suppress("DEPRECATION")
+          StaticLayout(l, textPaintLeft, leftColWidth, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0f, false)
+        }
+        canvas.save()
+        canvas.translate(leftXText.toFloat(), y.toFloat())
+        leftLayout.draw(canvas)
+        canvas.restore()
+        
+        if (r.isNotEmpty()) {
+          val priceY = y + bodyPaint.textSize
+          canvas.drawText(r, (rightXText + rightColWidth).toFloat(), priceY - 6, textPaintRight)
+        }
         val lineH = leftLayout.height.coerceAtLeast(bodyPaint.textSize.toInt()) + interItemLineSpacing
         y += lineH
       }
@@ -1630,6 +1800,95 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     // Second ruled line
     canvas.drawRect(leftX.toFloat(), y.toFloat(), rightX.toFloat(), (y + lineThicknessPx).toFloat(), linePaint)
     y += lineThicknessPx + gapAfterSecondLinePx
+
+    // Financial summary section - only include if not a gift receipt
+    if (!isGiftReceipt) {
+      val financialItems = mutableListOf<Pair<String, String>>()
+      if (subtotal.isNotEmpty()) financialItems.add(Pair("Subtotal", subtotal))
+      if (discounts.isNotEmpty()) financialItems.add(Pair("Discounts", discounts))
+      if (hst.isNotEmpty() && hst != "0.00") financialItems.add(Pair("HST", hst))
+      if (gst.isNotEmpty() && gst != "0.00") financialItems.add(Pair("GST", gst))
+      if (total.isNotEmpty()) financialItems.add(Pair("Total", total))
+      
+      if (financialItems.isNotEmpty()) {
+        val availableWidth = (width - padding * 2)
+        val leftColWidth = (availableWidth * 0.65).toInt()
+        val rightColWidth = availableWidth - leftColWidth
+        val leftXText = padding
+        val rightXText = padding + leftColWidth
+        val textPaintLeft = TextPaint(bodyPaint)
+        val textPaintRight = TextPaint(bodyPaint)
+        textPaintRight.textAlign = android.graphics.Paint.Align.RIGHT
+        
+        financialItems.forEach { (l, r) ->
+          val leftLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            StaticLayout.Builder.obtain(l, 0, l.length, textPaintLeft, leftColWidth)
+              .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+              .setIncludePad(false)
+              .build()
+          } else {
+            @Suppress("DEPRECATION")
+            StaticLayout(l, textPaintLeft, leftColWidth, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0f, false)
+          }
+          canvas.save()
+          canvas.translate(leftXText.toFloat(), y.toFloat())
+          leftLayout.draw(canvas)
+          canvas.restore()
+          
+          val priceY = y + bodyPaint.textSize
+          canvas.drawText(r, (rightXText + rightColWidth).toFloat(), priceY - 6, textPaintRight)
+          val lineH = leftLayout.height.coerceAtLeast(bodyPaint.textSize.toInt()) + interItemLineSpacing
+          y += lineH
+        }
+        
+        y += 10
+        // Third ruled line
+        canvas.drawRect(leftX.toFloat(), y.toFloat(), rightX.toFloat(), (y + lineThicknessPx).toFloat(), linePaint)
+        y += lineThicknessPx + 10
+        
+        // Payment methods section
+        if (payments.isNotEmpty()) {
+          // "Payment Method" header (centered)
+          val headerLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            StaticLayout.Builder.obtain("Payment Method", 0, "Payment Method".length, bodyPaint, width - padding * 2)
+              .setAlignment(Layout.Alignment.ALIGN_CENTER)
+              .setIncludePad(false)
+              .build()
+          } else {
+            @Suppress("DEPRECATION")
+            StaticLayout("Payment Method", bodyPaint, width - padding * 2, Layout.Alignment.ALIGN_CENTER, 1.0f, 0f, false)
+          }
+          canvas.save()
+          canvas.translate(padding.toFloat(), y.toFloat())
+          headerLayout.draw(canvas)
+          canvas.restore()
+          y += headerLayout.height + 8
+          
+          // Payment items
+          payments.forEach { (method, amount) ->
+            val leftLayout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+              StaticLayout.Builder.obtain(method, 0, method.length, textPaintLeft, leftColWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .build()
+            } else {
+              @Suppress("DEPRECATION")
+              StaticLayout(method, textPaintLeft, leftColWidth, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0f, false)
+            }
+            canvas.save()
+            canvas.translate(leftXText.toFloat(), y.toFloat())
+            leftLayout.draw(canvas)
+            canvas.restore()
+            
+            val priceY = y + bodyPaint.textSize
+            canvas.drawText(amount, (rightXText + rightColWidth).toFloat(), priceY - 6, textPaintRight)
+            val lineH = leftLayout.height.coerceAtLeast(bodyPaint.textSize.toInt()) + interItemLineSpacing
+            y += lineH
+          }
+          y += 10
+        }
+      }
+    }
 
     // Footer centered if present
     if (footerLayout != null) {

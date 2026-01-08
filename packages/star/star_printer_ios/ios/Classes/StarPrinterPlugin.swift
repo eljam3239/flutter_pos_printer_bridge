@@ -719,8 +719,16 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                                                                  lane: lane,
                                                                  footer: footer,
                                                                  items: items,
+                                                                 returnItems: returnItems,
+                                                                 subtotal: subtotal,
+                                                                 discounts: discounts,
+                                                                 hst: hst,
+                                                                 gst: gst,
+                                                                 total: total,
+                                                                 payments: payments,
                                                                  imageWidth: CGFloat(detailsCanvasDots),
-                                                                 receiptTitle: receiptTitle) {
+                                                                 receiptTitle: receiptTitle,
+                                                                 isGiftReceipt: isGiftReceipt) {
                             let param = StarXpandCommand.Printer.ImageParameter(image: detailsImage, width: detailsCanvasDots)
                             _ = printerBuilder.actionPrintImage(param)
                             _ = printerBuilder.actionFeedLine(1)
@@ -1584,7 +1592,7 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     }
 
     // Helper: render the details block into an image for graphics-only printers
-    private func createDetailsImage(location: String, date: String, time: String, cashier: String, receiptNum: String, lane: String, footer: String, items: [[String: Any]] = [], imageWidth: CGFloat = 576, receiptTitle: String = "Receipt") -> UIImage? {
+    private func createDetailsImage(location: String, date: String, time: String, cashier: String, receiptNum: String, lane: String, footer: String, items: [[String: Any]] = [], returnItems: [[String: Any]] = [], subtotal: String = "", discounts: String = "", hst: String = "", gst: String = "", total: String = "", payments: [String: String] = [:], imageWidth: CGFloat = 576, receiptTitle: String = "Receipt", isGiftReceipt: Bool = false) -> UIImage? {
         let font = UIFont.systemFont(ofSize: 22)
         let smallFont = UIFont.systemFont(ofSize: 20)
         let backgroundColor = UIColor.white
@@ -1623,19 +1631,75 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             for item in items {
                 let qty = (item["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                 let name = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
-                let priceRaw = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
                 let repeatRaw = (item["repeat"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
                 let repeatCount = Int(repeatRaw) ?? 1
                 let leftText = "\(qty) x \(name)"
-                let rightText = "\(priceRaw)"
-                for _ in 0..<max(1, min(repeatCount, 200)) {
-                    computedItemLines.append((leftText, rightText))
+                
+                if isGiftReceipt {
+                    // For gift receipts, only show quantity and name (no price)
+                    for _ in 0..<max(1, min(repeatCount, 200)) {
+                        computedItemLines.append((leftText, ""))
+                    }
+                } else {
+                    // For regular receipts, include price
+                    let priceRaw = (item["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                    let rightText = "\(priceRaw)"
+                    for _ in 0..<max(1, min(repeatCount, 200)) {
+                        computedItemLines.append((leftText, rightText))
+                    }
                 }
             }
             height += CGFloat(computedItemLines.count) * (smallFont.lineHeight + 4)
         }
+        
+        // Return items block
+        var computedReturnItemLines: [(String,String)] = []
+        if !returnItems.isEmpty {
+            // Add spacing and "Returns" header
+            height += 10 + (smallFont.lineHeight + 4) // spacing + header line
+            
+            for returnItem in returnItems {
+                let qty = (returnItem["quantity"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "1"
+                let name = (returnItem["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Item"
+                let leftText = "\(qty) x \(name)"
+                
+                if isGiftReceipt {
+                    // For gift receipts, only show quantity and name (no price)
+                    computedReturnItemLines.append((leftText, ""))
+                } else {
+                    // For regular receipts, include negative price
+                    let priceRaw = (returnItem["price"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.00"
+                    let rightText = "-\(priceRaw)"
+                    computedReturnItemLines.append((leftText, rightText))
+                }
+            }
+            height += CGFloat(computedReturnItemLines.count) * (smallFont.lineHeight + 4)
+        }
         // Second rule + spacing after it
         height += 2 + 10
+        
+        // Financial summary section - only include if not a gift receipt
+        var financialLines: [(String, String)] = []
+        if !isGiftReceipt {
+            if !subtotal.isEmpty { financialLines.append(("Subtotal", subtotal)) }
+            if !discounts.isEmpty { financialLines.append(("Discounts", discounts)) }
+            if !hst.isEmpty && hst != "0.00" { financialLines.append(("HST", hst)) }
+            if !gst.isEmpty && gst != "0.00" { financialLines.append(("GST", gst)) }
+            if !total.isEmpty { financialLines.append(("Total", total)) }
+            
+            if !financialLines.isEmpty {
+                height += CGFloat(financialLines.count) * (smallFont.lineHeight + 4)
+                // Third horizontal line after financial summary
+                height += 10 + 2 + 10
+                
+                // Payment methods section
+                if !payments.isEmpty {
+                    height += smallFont.lineHeight + 8 // "Payment Method" header
+                    height += CGFloat(payments.count) * (smallFont.lineHeight + 4)
+                    height += 10 // spacing after payments
+                }
+            }
+        }
         if !footer.isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraCenter]
             let rect = (footer as NSString).boundingRect(with: CGSize(width: width - 40, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs, context: nil)
@@ -1685,12 +1749,74 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 let leftRect = CGRect(x: 12, y: y, width: colWidth, height: smallFont.lineHeight + 2)
                 let rightRect = CGRect(x: 12 + colWidth, y: y, width: colWidth, height: smallFont.lineHeight + 2)
                 (ltext as NSString).draw(in: leftRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraLeft])
-                (rtext as NSString).draw(in: rightRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraRight])
+                
+                if !rtext.isEmpty {
+                    (rtext as NSString).draw(in: rightRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraRight])
+                }
+                
                 y += smallFont.lineHeight + 4
             }
         }
+        
+        // Return items section
+        if !computedReturnItemLines.isEmpty {
+            y += 10 // spacing
+            // "Returns" header
+            let headerRect = CGRect(x: 12, y: y, width: width - 24, height: smallFont.lineHeight + 2)
+            ("Returns" as NSString).draw(in: headerRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraLeft])
+            y += smallFont.lineHeight + 4
+            
+            // Return items
+            let colWidth = (width - 24) / 2
+            for (ltext, rtext) in computedReturnItemLines {
+                let leftRect = CGRect(x: 12, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                let rightRect = CGRect(x: 12 + colWidth, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                (ltext as NSString).draw(in: leftRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraLeft])
+                
+                if !rtext.isEmpty {
+                    (rtext as NSString).draw(in: rightRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraRight])
+                }
+                
+                y += smallFont.lineHeight + 4
+            }
+        }
+        
         ctx.fill(CGRect(x: 0, y: y, width: width, height: 2)) // second rule
         y += 2 + 10
+
+        // Financial summary section - only include if not a gift receipt
+        if !isGiftReceipt && !financialLines.isEmpty {
+            let colWidth = (width - 24) / 2
+            for (ltext, rtext) in financialLines {
+                let leftRect = CGRect(x: 12, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                let rightRect = CGRect(x: 12 + colWidth, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                (ltext as NSString).draw(in: leftRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraLeft])
+                (rtext as NSString).draw(in: rightRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraRight])
+                y += smallFont.lineHeight + 4
+            }
+            
+            y += 10
+            ctx.fill(CGRect(x: 0, y: y, width: width, height: 2)) // third rule
+            y += 2 + 10
+            
+            // Payment methods section
+            if !payments.isEmpty {
+                // "Payment Method" header (centered)
+                let headerRect = CGRect(x: 12, y: y, width: width - 24, height: smallFont.lineHeight + 2)
+                ("Payment Method" as NSString).draw(in: headerRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraCenter])
+                y += smallFont.lineHeight + 8
+                
+                let colWidth = (width - 24) / 2
+                for (method, amount) in payments {
+                    let leftRect = CGRect(x: 12, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                    let rightRect = CGRect(x: 12 + colWidth, y: y, width: colWidth, height: smallFont.lineHeight + 2)
+                    (method as NSString).draw(in: leftRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraLeft])
+                    (amount as NSString).draw(in: rightRect, withAttributes: [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraRight])
+                    y += smallFont.lineHeight + 4
+                }
+                y += 10
+            }
+        }
 
         if !footer.isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [.font: smallFont, .foregroundColor: textColor, .paragraphStyle: paraCenter]
