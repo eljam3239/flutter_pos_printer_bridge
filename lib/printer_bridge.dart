@@ -2295,7 +2295,7 @@ $logoZpl^FS''';
       if (fontSize <= 25) {
         return 10; // For smaller fonts like size 25
       } else if (fontSize <= 38) {
-        return 20; // For medium fonts like size 38
+        return 16; // Reduced from 20 to 16 for more accurate centering of font size 38
       } else {
         return (fontSize * 0.5)
             .round(); // For larger fonts, scale proportionally
@@ -2332,9 +2332,18 @@ $logoZpl^FS''';
       0,
       paperWidthDots - estimatedBarcodeWidth,
     );
-    final productNameX = (paperWidthDots - estimatedProductNameWidth) ~/ 2;
-    final colorSizeX = (paperWidthDots - estimatedColorSizeWidth) ~/ 2;
-    final priceX = (paperWidthDots - estimatedPriceWidth) ~/ 2;
+    final productNameX = ((paperWidthDots - estimatedProductNameWidth) ~/ 2).clamp(
+      0,
+      paperWidthDots - estimatedProductNameWidth,
+    );
+    final colorSizeX = ((paperWidthDots - estimatedColorSizeWidth) ~/ 2).clamp(
+      0,
+      paperWidthDots - estimatedColorSizeWidth,
+    );
+    final priceX = ((paperWidthDots - estimatedPriceWidth) ~/ 2).clamp(
+      0,
+      paperWidthDots - estimatedPriceWidth,
+    );
 
     debugPrint(
       'Zebra label positions - ProductName: ($productNameX,14), Price: ($priceX,52), ColorSize: ($colorSizeX,90), Barcode: ($barcodeX,124)',

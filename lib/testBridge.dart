@@ -1032,10 +1032,10 @@ class _MyHomePageState extends State<MyHomePage> {
       debugPrint('Testing PrinterBridge.printLabel...');
       
       final labelData = PrinterLabelData(
-        productName: 'T-Shirt',
-        price: '\$5.00',
-        colorSize: 'Small Turquoise',
-        barcode: '123456789',
+        productName: 'Bracelet 84 in Silver',
+        price: '\$998',
+        colorSize: 'Silver | Large',
+        barcode: '12072',
         quantity: 1,
       );
       
