@@ -21,7 +21,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let tsp100skWidth = 576  // Optimized for TSP100SK label printing
         
         if name.contains("mpop") { return 384 }
-        if name.contains("mc_label2") || name.contains("mc-label2") { return 384 }
+        // mcLabel2 is 300 DPI (11.8 dots/mm) on 58mm paper with ~48mm printable area
+        // 48mm × 11.8 = ~566 dots (NOT 384 which would be for 203 DPI)
+        if name.contains("mc_label2") || name.contains("mc-label2") { return 566 }
         if name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk") { 
             print("DEBUG: TSP100SK detected, using \(tsp100skWidth) dots width")
             return tsp100skWidth
@@ -34,6 +36,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     // Approximate printable width in millimeters for ruled lines
     private func currentPrintableWidthMm() -> Double {
         let dots = currentPrintableWidthDots()
+        let name = self.printer?.information?.model.description.lowercased() ?? ""
+        // mcLabel2 is 300 DPI so 566 dots = 48mm, not 72mm
+        if name.contains("mc_label2") || name.contains("mc-label2") { return 48.0 }
         if dots >= 560 { return 72.0 } // 80mm class
         if dots >= 240 && dots <= 250 { return 48.0 } // TSP100SK 2-inch label printer
         if dots >= 380 { return 48.0 } // 58mm/2-inch class
@@ -45,6 +50,11 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let modelStr = self.printer?.information?.model.description.lowercased() ?? ""
         if modelStr.contains("tsp650") {
             return 42  // TSP650II doesn't support .setWidth() so use conservative char count
+        }
+        // mcLabel2 at 300 DPI with 566 dots can fit more characters
+        // At ~12 dots/char (standard font), 566/12 = ~47 chars
+        if modelStr.contains("mc_label2") || modelStr.contains("mc-label2") {
+            return 48  // Match 80mm printers since mcLabel2 has similar dot width
         }
         let dots = currentPrintableWidthDots()
         if dots >= 560 { return 48 }
