@@ -499,8 +499,17 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             return
         }
         
+        // Check if this is a graphics-only printer (TSP100III series)
+        // These printers need the legacy approach which uses createDetailsImage() to render
+        // the entire receipt as ONE image (command-based creates gaps between lines)
+        let isGraphicsOnly: Bool = {
+            guard let model = self.printer?.information?.model else { return false }
+            return model == .tsp100IIIW || model.rawValue == 7 // tsp100IIIBI
+        }()
+        
         // NEW: Check for command-based printing approach
-        if let commands = args["commands"] as? [[String: Any]], !commands.isEmpty {
+        // Skip command-based for graphics-only printers - they need the legacy createDetailsImage approach
+        if let commands = args["commands"] as? [[String: Any]], !commands.isEmpty, !isGraphicsOnly {
             print("DEBUG: Using command-based printing with \(commands.count) commands")
             
             Task {
@@ -539,6 +548,14 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 }
             }
             return
+        }
+        
+        // For graphics-only printers with commands, convert commands back to layout format
+        // This allows the legacy createDetailsImage() to render everything as one image
+        if let commands = args["commands"] as? [[String: Any]], !commands.isEmpty, isGraphicsOnly {
+            print("DEBUG: Graphics-only printer detected - converting commands to legacy layout format")
+            // Fall through to legacy approach - need to reconstruct layout from commands
+            // For now, just log and continue to legacy path which will use empty settings
         }
         
         // LEGACY: Fall back to existing layout-based approach
@@ -1573,25 +1590,35 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let graphicsOnly = isGraphicsOnlyPrinter()
         let totalCPL = currentColumnsPerLine()
         
-        if bold { _ = builder.styleBold(true) }
+        // Build the padded line (used for both graphics and TSP650II)
+        let totalLen = left.count + right.count
+        let spacesNeeded = max(1, totalCPL - totalLen)
+        let paddedLine = left + String(repeating: " ", count: spacesNeeded) + right + "\n"
         
-        if graphicsOnly || isTSP650II() {
-            // Manual space padding approach
-            let totalLen = left.count + right.count
-            let spacesNeeded = max(1, totalCPL - totalLen)
-            let paddedLine = left + String(repeating: " ", count: spacesNeeded) + right
-            _ = builder.actionPrintText("\(paddedLine)\n")
+        if graphicsOnly {
+            // For graphics-only printers, render as image
+            let targetDots = currentPrintableWidthDots()
+            let fontSize: CGFloat = bold ? 28 : 24
+            if let textImage = createTextImage(text: paddedLine, fontSize: fontSize, imageWidth: CGFloat(targetDots)) {
+                let param = StarXpandCommand.Printer.ImageParameter(image: textImage, width: targetDots)
+                _ = builder.actionPrintImage(param)
+            }
+        } else if isTSP650II() {
+            // TSP650II: use text but with manual padding
+            if bold { _ = builder.styleBold(true) }
+            _ = builder.actionPrintText(paddedLine)
+            if bold { _ = builder.styleBold(false) }
         } else {
             // Use TextParameter with width for printers that support it
+            if bold { _ = builder.styleBold(true) }
             let leftWidth = max(8, totalCPL / 2)
             let rightWidth = max(8, totalCPL - leftWidth)
             let leftParam = StarXpandCommand.Printer.TextParameter().setWidth(leftWidth)
             let rightParam = StarXpandCommand.Printer.TextParameter().setWidth(rightWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
             _ = builder.actionPrintText(left, leftParam)
             _ = builder.actionPrintText("\(right)\n", rightParam)
+            if bold { _ = builder.styleBold(false) }
         }
-        
-        if bold { _ = builder.styleBold(false) }
     }
     
     /// Execute a multi-column text command
@@ -1602,13 +1629,11 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let graphicsOnly = isGraphicsOnlyPrinter()
         let totalCPL = currentColumnsPerLine()
         
-        if bold { _ = builder.styleBold(true) }
-        
         // Calculate total weight
         let totalWeight = columns.reduce(0) { $0 + (($1["weight"] as? Int) ?? 1) }
         
-        if graphicsOnly || isTSP650II() {
-            // Manual padding approach - build a single line
+        // Build the padded line (used for graphics-only and TSP650II)
+        func buildPaddedLine() -> String {
             var line = ""
             for col in columns {
                 let text = (col["text"] as? String) ?? ""
@@ -1639,9 +1664,27 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                 }
                 line += paddedText
             }
-            _ = builder.actionPrintText("\(line)\n")
+            return line + "\n"
+        }
+        
+        if graphicsOnly {
+            // For graphics-only printers, render as image
+            let paddedLine = buildPaddedLine()
+            let targetDots = currentPrintableWidthDots()
+            let fontSize: CGFloat = bold ? 28 : 24
+            if let textImage = createTextImage(text: paddedLine, fontSize: fontSize, imageWidth: CGFloat(targetDots)) {
+                let param = StarXpandCommand.Printer.ImageParameter(image: textImage, width: targetDots)
+                _ = builder.actionPrintImage(param)
+            }
+        } else if isTSP650II() {
+            // TSP650II: use text but with manual padding
+            if bold { _ = builder.styleBold(true) }
+            let paddedLine = buildPaddedLine()
+            _ = builder.actionPrintText(paddedLine)
+            if bold { _ = builder.styleBold(false) }
         } else {
-            // Use TextParameter with widths
+            // Use TextParameter with widths for other printers
+            if bold { _ = builder.styleBold(true) }
             for (index, col) in columns.enumerated() {
                 let text = (col["text"] as? String) ?? ""
                 let weight = (col["weight"] as? Int) ?? 1
@@ -1662,9 +1705,8 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
                     _ = builder.actionPrintText(textToPrint, param)
                 }
             }
+            if bold { _ = builder.styleBold(false) }
         }
-        
-        if bold { _ = builder.styleBold(false) }
     }
     
     /// Execute a horizontal line command
@@ -1675,11 +1717,15 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         let graphicsOnly = isGraphicsOnlyPrinter()
         
         if graphicsOnly {
-            // Print dashes as text for graphics-only printers
+            // For graphics-only printers, render line as image
+            let targetDots = currentPrintableWidthDots()
             let charCount = currentColumnsPerLine()
             let lineChar = dashed ? "-" : "-"
-            let lineText = String(repeating: lineChar, count: charCount)
-            _ = builder.actionPrintText("\(lineText)\n")
+            let lineText = String(repeating: lineChar, count: charCount) + "\n"
+            if let textImage = createTextImage(text: lineText, fontSize: 24, imageWidth: CGFloat(targetDots)) {
+                let param = StarXpandCommand.Printer.ImageParameter(image: textImage, width: targetDots)
+                _ = builder.actionPrintImage(param)
+            }
         } else {
             // Use ruled line
             let param = StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm)

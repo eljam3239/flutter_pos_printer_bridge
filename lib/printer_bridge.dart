@@ -1609,6 +1609,7 @@ class PrinterBridge {
 
   static Future<bool> _printStarReceipt(PrinterReceiptData receiptData) async {
     try {
+      final printableAreaMm = PrinterBridge.starConfig.printableAreaMm;
       final paperWidthMm = PrinterBridge.starConfig.paperWidthMm;
       debugPrint('Star receipt - using ${paperWidthMm}mm paper (command-based approach)');
       
@@ -1617,9 +1618,63 @@ class PrinterBridge {
       
       debugPrint('Star receipt - built ${commands.length} commands');
       
+      // Also build legacy layout settings for graphics-only printers (TSP100IIIW)
+      // These printers need createDetailsImage() which renders everything as ONE image
+      final layoutSettings = {
+        'layout': {
+          'header': {
+            'title': receiptData.storeName,
+            'align': 'center',
+            'fontSize': 32,
+            'spacingLines': 1,
+          },
+          'details': {
+            'locationText': receiptData.storeAddress,
+            'date': receiptData.date,
+            'time': receiptData.time,
+            'cashier': receiptData.cashierName ?? '',
+            'receiptNum': receiptData.receiptNumber ?? '',
+            'lane': receiptData.laneNumber ?? '',
+            'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
+            'printableAreaMm': printableAreaMm,
+            'receiptTitle': receiptData.receiptTitle,
+            'isGiftReceipt': receiptData.isGiftReceipt,
+            if (!receiptData.isGiftReceipt) ...{
+              'subtotal': receiptData.subtotal?.toStringAsFixed(2),
+              'discounts': receiptData.discounts?.toStringAsFixed(2), 
+              'hst': receiptData.hst?.toStringAsFixed(2),
+              'gst': receiptData.gst?.toStringAsFixed(2),
+              'total': receiptData.total?.toStringAsFixed(2),
+              'payments': receiptData.payments?.map((method, amount) => 
+                MapEntry(method, amount.toStringAsFixed(2))),
+            },
+          },
+          'items': receiptData.items.map((item) => <String, dynamic>{
+            'quantity': item.quantity.toString(),
+            'name': item.itemName,
+            if (!receiptData.isGiftReceipt) 'price': item.unitPrice.toStringAsFixed(2),
+          }).toList(),
+          'returnItems': receiptData.returnItems?.map((returnItem) => <String, dynamic>{
+            'quantity': returnItem.quantity.toString(),
+            'name': returnItem.itemName,
+            if (!receiptData.isGiftReceipt) 'price': returnItem.unitPrice.toStringAsFixed(2),
+          }).toList(),
+          'image': receiptData.logoBase64 == null
+              ? null
+              : {
+                  'base64': receiptData.logoBase64,
+                  'mime': 'image/png',
+                  'align': 'center',
+                  'width': 200,
+                  'spacingLines': 1,
+                },
+        },
+      };
+      
       final printJob = star.PrintJob(
         content: '',
         commands: commands.map((cmd) => cmd.toMap()).toList(),
+        settings: layoutSettings, // Include legacy settings for graphics-only printer fallback
       );
       
       debugPrint('Sending Star receipt to printer...');
@@ -1720,7 +1775,7 @@ class PrinterBridge {
       } else {
         // Regular receipt: quantity | name | price columns
         cmds.add(StarPrintCommand.textColumns([
-          StarColumn(text: '${item.quantity}x', weight: 1, align: StarAlignment.left),
+          StarColumn(text: '${item.quantity} x', weight: 1, align: StarAlignment.left),
           StarColumn(text: item.itemName, weight: 5, align: StarAlignment.left),
           StarColumn(text: item.totalPrice.toStringAsFixed(2), weight: 2, align: StarAlignment.right),
         ]));
@@ -1739,7 +1794,7 @@ class PrinterBridge {
           ));
         } else {
           cmds.add(StarPrintCommand.textColumns([
-            StarColumn(text: '${returnItem.quantity}x', weight: 1, align: StarAlignment.left),
+            StarColumn(text: '${returnItem.quantity} x', weight: 1, align: StarAlignment.left),
             StarColumn(text: returnItem.itemName, weight: 5, align: StarAlignment.left),
             StarColumn(text: '-${returnItem.unitPrice.toStringAsFixed(2)}', weight: 2, align: StarAlignment.right),
           ]));
@@ -1758,37 +1813,30 @@ class PrinterBridge {
         ));
       }
       
-      if (receiptData.discounts != null && receiptData.discounts! != 0) {
+      if (receiptData.discounts != null ) {
         cmds.add(StarPrintCommand.textLeftRight(
           'Discounts',
           '-${receiptData.discounts!.toStringAsFixed(2)}',
         ));
       }
       
-      if (receiptData.hst != null && receiptData.hst! != 0) {
+      if (receiptData.hst != null) {
         cmds.add(StarPrintCommand.textLeftRight(
           'HST',
           receiptData.hst!.toStringAsFixed(2),
         ));
       }
       
-      if (receiptData.gst != null && receiptData.gst! != 0) {
+      if (receiptData.gst != null) {
         cmds.add(StarPrintCommand.textLeftRight(
           'GST',
           receiptData.gst!.toStringAsFixed(2),
         ));
       }
-      
-      cmds.add(StarPrintCommand.line());
-      
-      // Total (larger font)
       if (receiptData.total != null) {
-        cmds.add(StarPrintCommand.textLeftRight('Total', ''));
-        cmds.add(StarPrintCommand.text(
-          '${receiptData.total!.toStringAsFixed(2)}\n',
-          align: StarAlignment.right,
-          magnificationWidth: 2,
-          magnificationHeight: 2,
+        cmds.add(StarPrintCommand.textLeftRight(
+          'Total',
+          receiptData.total!.toStringAsFixed(2),
         ));
       }
       
