@@ -1692,6 +1692,8 @@ class PrinterBridge {
   /// All receipt layout logic lives here in Dart
   static List<StarPrintCommand> _buildStarReceiptCommands(PrinterReceiptData receiptData) {
     final List<StarPrintCommand> cmds = [];
+    final paperWidthMm = PrinterBridge.starConfig.paperWidthMm;
+    final isNarrowPaper = paperWidthMm <= 58; // 58mm or 38mm paper
 
     // 1. HEADER - Store name (centered, large)
     if (receiptData.storeName.isNotEmpty) {
@@ -1740,17 +1742,29 @@ class PrinterBridge {
       bold: true,
     ));
 
-    // 6. DATE/TIME and CASHIER (left-right on same line)
+    // 6. DATE/TIME and CASHIER
     final dateTimeStr = '${receiptData.date} ${receiptData.time}';
     final cashierStr = receiptData.cashierName != null && receiptData.cashierName!.isNotEmpty
         ? 'Cashier: ${receiptData.cashierName}'
         : '';
     
-    if (dateTimeStr.trim().isNotEmpty || cashierStr.isNotEmpty) {
-      cmds.add(StarPrintCommand.textLeftRight(dateTimeStr, cashierStr));
+    if (isNarrowPaper) {
+      // Narrow paper (58mm/38mm): each field on its own line
+      if (dateTimeStr.trim().isNotEmpty) {
+        cmds.add(StarPrintCommand.text('$dateTimeStr\n'));
+      }
+      
+      if (cashierStr.isNotEmpty) {
+        cmds.add(StarPrintCommand.text('$cashierStr\n'));
+      }
+    } else {
+      // Wide paper (80mm): date/time and cashier on same line
+      if (dateTimeStr.trim().isNotEmpty || cashierStr.isNotEmpty) {
+        cmds.add(StarPrintCommand.textLeftRight(dateTimeStr, cashierStr));
+      }
     }
 
-    // 7. RECEIPT NUMBER and LANE (left-right on same line)
+    // 7. RECEIPT NUMBER and LANE
     final receiptNumStr = receiptData.receiptNumber != null && receiptData.receiptNumber!.isNotEmpty
         ? 'Receipt No: ${receiptData.receiptNumber}'
         : '';
@@ -1758,8 +1772,19 @@ class PrinterBridge {
         ? 'Lane: ${receiptData.laneNumber}'
         : '';
     
-    if (receiptNumStr.isNotEmpty || laneStr.isNotEmpty) {
-      cmds.add(StarPrintCommand.textLeftRight(receiptNumStr, laneStr));
+    if (isNarrowPaper) {
+      // Narrow paper (58mm/38mm): each field on its own line
+      if (receiptNumStr.isNotEmpty) {
+        cmds.add(StarPrintCommand.text('$receiptNumStr\n'));
+      }
+      if (laneStr.isNotEmpty) {
+        cmds.add(StarPrintCommand.text('$laneStr\n'));
+      }
+    } else {
+      // Wide paper (80mm): receipt number and lane on same line
+      if (receiptNumStr.isNotEmpty || laneStr.isNotEmpty) {
+        cmds.add(StarPrintCommand.textLeftRight(receiptNumStr, laneStr));
+      }
     }
 
     cmds.add(StarPrintCommand.feed(1));
