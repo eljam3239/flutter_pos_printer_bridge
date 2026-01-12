@@ -384,6 +384,49 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
     CoroutineScope(Dispatchers.IO).launch {
       try {
+        // Check if this is a graphics-only printer (TSP100III series)
+        // These printers need the legacy approach which uses createDetailsBitmap to render
+        // the entire receipt as ONE image (command-based creates gaps between lines)
+        val isGraphicsOnly = isGraphicsOnlyPrinter()
+        
+        // NEW: Check for command-based printing approach
+        // Skip command-based for graphics-only printers - they need the legacy createDetailsBitmap approach
+        @Suppress("UNCHECKED_CAST")
+        val commandsList = args["commands"] as? List<Map<*, *>>
+        
+        if (commandsList != null && commandsList.isNotEmpty() && !isGraphicsOnly) {
+          println("DEBUG: Using command-based printing with ${commandsList.size} commands")
+          
+          val builder = StarXpandCommandBuilder()
+          val printerBuilder = PrinterBuilder()
+          
+          // Set international character (matching existing behavior)
+          printerBuilder.styleInternationalCharacter(InternationalCharacterType.Usa)
+          printerBuilder.styleCharacterSpace(0.0)
+          
+          // Execute all commands
+          @Suppress("UNCHECKED_CAST")
+          executeCommands(commandsList as List<Map<*, *>>, printerBuilder)
+          
+          // Build and send
+          builder.addDocument(DocumentBuilder().addPrinter(printerBuilder))
+          val commandData = builder.getCommands()
+          
+          printer?.printAsync(commandData)?.await()
+          
+          println("Command-based print completed successfully")
+          CoroutineScope(Dispatchers.Main).launch {
+            result.success(null)
+          }
+          return@launch
+        }
+        
+        // For graphics-only printers with commands, log and fall through to legacy
+        if (commandsList != null && commandsList.isNotEmpty() && isGraphicsOnly) {
+          println("DEBUG: Graphics-only printer detected - falling back to legacy layout format")
+        }
+        
+        // LEGACY: Fall back to existing layout-based approach
         val builder = StarXpandCommandBuilder()
 
         // Read structured layout from Dart
@@ -598,22 +641,14 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
               } else null
             } ?: emptyList()
             
-            // Convert payments map to list of maps for graphics-only printer
-            val paymentsList = payments.map { (method, amount) ->
-              mapOf("method" to method, "amount" to amount)
-            }
-            
             val detailsBmp = createDetailsBitmap(
-              storeInfo = mapOf("location" to locationText),
-              orderInfo = mapOf(
-                "date" to dateText,
-                "time" to timeText,
-                "cashier" to cashier,
-                "receiptNum" to receiptNum,
-                "lane" to lane,
-                "footer" to footer,
-                "receiptTitle" to receiptTitle
-              ),
+              locationText = locationText,
+              dateText = dateText,
+              timeText = timeText,
+              cashier = cashier,
+              receiptNum = receiptNum,
+              lane = lane,
+              footer = footer,
               items = parsedItems,
               returnItems = parsedReturnItems,
               subtotal = subtotal,
@@ -621,7 +656,9 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
               hst = hst,
               gst = gst,
               total = total,
-              payments = paymentsList,
+              payments = payments,
+              canvasWidth = detailsCanvas,
+              receiptTitle = receiptTitle,
               isGiftReceipt = isGiftReceipt
             )
             if (detailsBmp != null) {
@@ -1060,8 +1097,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         
         builder.addDocument(documentBuilder)
         
-        val commands = builder.getCommands()
-        printer?.printAsync(commands)?.await()
+        val printCommands = builder.getCommands()
+        printer?.printAsync(printCommands)?.await()
         
         withContext(Dispatchers.Main) {
           result.success(true)
@@ -1277,6 +1314,362 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     } catch (_: Exception) { false }
   }
 
+  // Check if current printer is TSP650II (doesn't support setWidth)
+  private fun isTSP650II(): Boolean {
+    val modelStr = printer?.information?.model?.toString()?.lowercase() ?: ""
+    return modelStr.contains("tsp650")
+  }
+
+  // MARK: - Command-Based Printing
+
+  // Execute a list of print commands from Dart
+  private fun executeCommands(commands: List<Map<*, *>>, printerBuilder: PrinterBuilder): Boolean {
+    if (commands.isEmpty()) return false
+    
+    println("DEBUG: Executing ${commands.size} Star print commands")
+    
+    for ((index, cmd) in commands.withIndex()) {
+      val type = cmd["type"] as? String ?: continue
+      @Suppress("UNCHECKED_CAST")
+      val params = cmd["parameters"] as? Map<String, Any?> ?: continue
+      
+      println("DEBUG: Executing command $index: $type")
+      
+      when (type) {
+        "text" -> executeTextCommand(params, printerBuilder)
+        "textLeftRight" -> executeTextLeftRightCommand(params, printerBuilder)
+        "textColumns" -> executeTextColumnsCommand(params, printerBuilder)
+        "line" -> executeLineCommand(params, printerBuilder)
+        "feed" -> executeFeedCommand(params, printerBuilder)
+        "image" -> executeImageCommand(params, printerBuilder)
+        "barcode" -> executeBarcodeCommand(params, printerBuilder)
+        "qrCode" -> executeQRCodeCommand(params, printerBuilder)
+        "cut" -> executeCutCommand(params, printerBuilder)
+        "openDrawer" -> println("DEBUG: openDrawer command noted (handled separately)")
+        else -> println("WARNING: Unknown command type: $type")
+      }
+    }
+    
+    return true
+  }
+
+  // Execute a text command
+  private fun executeTextCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val text = params["text"] as? String ?: return
+    
+    val align = params["align"] as? String ?: "left"
+    val bold = params["bold"] as? Boolean ?: false
+    val underline = params["underline"] as? Boolean ?: false
+    val invert = params["invert"] as? Boolean ?: false
+    val magWidth = (params["magnificationWidth"] as? Number)?.toInt() ?: 1
+    val magHeight = (params["magnificationHeight"] as? Number)?.toInt() ?: 1
+    
+    val graphicsOnly = isGraphicsOnlyPrinter()
+    
+    if (graphicsOnly) {
+      // For graphics-only printers, render text as image
+      val fontSize = 24 * maxOf(magWidth, magHeight)
+      val targetDots = currentPrintableWidthDots()
+      
+      val textBitmap = createSingleLineTextBitmap(text, fontSize.toFloat(), targetDots)
+      if (textBitmap != null) {
+        builder.actionPrintImage(ImageParameter(textBitmap, targetDots))
+      }
+    } else {
+      // Native text printing - apply alignment
+      val alignment = when (align) {
+        "center" -> Alignment.Center
+        "right" -> Alignment.Right
+        else -> Alignment.Left
+      }
+      builder.styleAlignment(alignment)
+      
+      // Apply styles
+      if (bold) builder.styleBold(true)
+      if (underline) builder.styleUnderLine(true)
+      if (invert) builder.styleInvert(true)
+      if (magWidth > 1 || magHeight > 1) {
+        builder.styleMagnification(MagnificationParameter(magWidth, magHeight))
+      }
+      
+      // Print text
+      builder.actionPrintText(text)
+      
+      // Reset styles
+      if (magWidth > 1 || magHeight > 1) {
+        builder.styleMagnification(MagnificationParameter(1, 1))
+      }
+      if (invert) builder.styleInvert(false)
+      if (underline) builder.styleUnderLine(false)
+      if (bold) builder.styleBold(false)
+      builder.styleAlignment(Alignment.Left)
+    }
+  }
+
+  // Execute a left-right text command (two texts on same line)
+  private fun executeTextLeftRightCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val left = params["left"] as? String ?: ""
+    val right = params["right"] as? String ?: ""
+    val bold = params["bold"] as? Boolean ?: false
+    
+    val graphicsOnly = isGraphicsOnlyPrinter()
+    val totalCPL = currentColumnsPerLine()
+    
+    // Build the padded line (used for both graphics and TSP650II)
+    val totalLen = left.length + right.length
+    val spacesNeeded = maxOf(1, totalCPL - totalLen)
+    val paddedLine = left + " ".repeat(spacesNeeded) + right + "\n"
+    
+    if (graphicsOnly) {
+      // For graphics-only printers, render as image
+      val targetDots = currentPrintableWidthDots()
+      val fontSize = if (bold) 28f else 24f
+      val textBitmap = createSingleLineTextBitmap(paddedLine, fontSize, targetDots)
+      if (textBitmap != null) {
+        builder.actionPrintImage(ImageParameter(textBitmap, targetDots))
+      }
+    } else if (isTSP650II()) {
+      // TSP650II: use text but with manual padding
+      if (bold) builder.styleBold(true)
+      builder.actionPrintText(paddedLine)
+      if (bold) builder.styleBold(false)
+    } else {
+      // Use TextParameter with width for printers that support it
+      if (bold) builder.styleBold(true)
+      val leftWidth = maxOf(8, totalCPL / 2)
+      val rightWidth = maxOf(8, totalCPL - leftWidth)
+      val leftParam = TextParameter().setWidth(leftWidth)
+      val rightParam = TextParameter().setWidth(rightWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+      builder.actionPrintText(left, leftParam)
+      builder.actionPrintText("$right\n", rightParam)
+      if (bold) builder.styleBold(false)
+    }
+  }
+
+  // Execute a multi-column text command
+  private fun executeTextColumnsCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    @Suppress("UNCHECKED_CAST")
+    val columns = params["columns"] as? List<Map<String, Any?>> ?: return
+    val bold = params["bold"] as? Boolean ?: false
+    
+    val graphicsOnly = isGraphicsOnlyPrinter()
+    val totalCPL = currentColumnsPerLine()
+    
+    // Calculate total weight
+    val totalWeight = columns.sumOf { (it["weight"] as? Number)?.toInt() ?: 1 }
+    
+    // Build the padded line (used for graphics-only and TSP650II)
+    fun buildPaddedLine(): String {
+      val sb = StringBuilder()
+      for (col in columns) {
+        val text = col["text"] as? String ?: ""
+        val weight = (col["weight"] as? Number)?.toInt() ?: 1
+        val align = col["align"] as? String ?: "left"
+        val colWidth = maxOf(1, (totalCPL * weight) / totalWeight)
+        
+        val paddedText = when (align) {
+          "right" -> if (text.length >= colWidth) text.take(colWidth) else " ".repeat(colWidth - text.length) + text
+          "center" -> {
+            val padding = maxOf(0, colWidth - text.length)
+            val leftPad = padding / 2
+            val rightPad = padding - leftPad
+            val truncatedText = if (text.length > colWidth) text.take(colWidth) else text
+            " ".repeat(leftPad) + truncatedText + " ".repeat(rightPad)
+          }
+          else -> if (text.length >= colWidth) text.take(colWidth) else text + " ".repeat(colWidth - text.length)
+        }
+        sb.append(paddedText)
+      }
+      return sb.toString() + "\n"
+    }
+    
+    if (graphicsOnly) {
+      // For graphics-only printers, render as image
+      val paddedLine = buildPaddedLine()
+      val targetDots = currentPrintableWidthDots()
+      val fontSize = if (bold) 28f else 24f
+      val textBitmap = createSingleLineTextBitmap(paddedLine, fontSize, targetDots)
+      if (textBitmap != null) {
+        builder.actionPrintImage(ImageParameter(textBitmap, targetDots))
+      }
+    } else if (isTSP650II()) {
+      // TSP650II: use text but with manual padding
+      if (bold) builder.styleBold(true)
+      val paddedLine = buildPaddedLine()
+      builder.actionPrintText(paddedLine)
+      if (bold) builder.styleBold(false)
+    } else {
+      // Use TextParameter with widths for other printers
+      if (bold) builder.styleBold(true)
+      for ((index, col) in columns.withIndex()) {
+        val text = col["text"] as? String ?: ""
+        val weight = (col["weight"] as? Number)?.toInt() ?: 1
+        val align = col["align"] as? String ?: "left"
+        val colWidth = maxOf(4, (totalCPL * weight) / totalWeight)
+        
+        val isLast = index == columns.size - 1
+        val textToPrint = if (isLast) "$text\n" else text
+        
+        when (align) {
+          "right" -> {
+            val param = TextParameter().setWidth(colWidth, TextWidthParameter().setAlignment(TextAlignment.Right))
+            builder.actionPrintText(textToPrint, param)
+          }
+          "center" -> {
+            val param = TextParameter().setWidth(colWidth, TextWidthParameter().setAlignment(TextAlignment.Center))
+            builder.actionPrintText(textToPrint, param)
+          }
+          else -> {
+            val param = TextParameter().setWidth(colWidth)
+            builder.actionPrintText(textToPrint, param)
+          }
+        }
+      }
+      if (bold) builder.styleBold(false)
+    }
+  }
+
+  // Execute a horizontal line command
+  private fun executeLineCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val dashed = params["dashed"] as? Boolean ?: false
+    val fullWidthMm = currentPrintableWidthMm()
+    
+    val graphicsOnly = isGraphicsOnlyPrinter()
+    
+    if (graphicsOnly) {
+      // For graphics-only printers, render line as image
+      val targetDots = currentPrintableWidthDots()
+      val charCount = currentColumnsPerLine()
+      val lineChar = if (dashed) "-" else "-"
+      val lineText = lineChar.repeat(charCount) + "\n"
+      val textBitmap = createSingleLineTextBitmap(lineText, 24f, targetDots)
+      if (textBitmap != null) {
+        builder.actionPrintImage(ImageParameter(textBitmap, targetDots))
+      }
+    } else {
+      // Native ruled line
+      val lineParam = RuledLineParameter(fullWidthMm)
+      builder.actionPrintRuledLine(lineParam)
+    }
+  }
+
+  // Execute a feed (line break) command
+  private fun executeFeedCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val lines = (params["lines"] as? Number)?.toInt() ?: 1
+    builder.actionFeedLine(lines)
+  }
+
+  // Execute an image command
+  private fun executeImageCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val base64 = params["base64"] as? String ?: return
+    val width = (params["width"] as? Number)?.toInt() ?: 200
+    val align = params["align"] as? String ?: "center"
+    
+    val targetDots = currentPrintableWidthDots()
+    val decoded = decodeBase64ToBitmap(base64) ?: return
+    val clamped = width.coerceIn(8, targetDots)
+    val flat = flattenBitmap(decoded, clamped)
+    
+    // Center if needed
+    val finalBitmap = if (align == "center") {
+      centerOnCanvas(flat, targetDots) ?: flat
+    } else {
+      flat
+    }
+    
+    val alignment = when (align) {
+      "center" -> Alignment.Center
+      "right" -> Alignment.Right
+      else -> Alignment.Left
+    }
+    
+    builder.styleAlignment(alignment)
+    builder.actionPrintImage(ImageParameter(finalBitmap, targetDots))
+    builder.styleAlignment(Alignment.Left)
+  }
+
+  // Execute a barcode command
+  private fun executeBarcodeCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val content = params["content"] as? String ?: return
+    val symbologyStr = (params["symbology"] as? String)?.lowercase() ?: "code128"
+    val height = (params["height"] as? Number)?.toInt() ?: 50
+    val printHRI = params["printHRI"] as? Boolean ?: true
+    
+    val symbology = when (symbologyStr) {
+      "code128" -> BarcodeSymbology.Code128
+      "code39" -> BarcodeSymbology.Code39
+      "code93" -> BarcodeSymbology.Code93
+      "jan8", "ean8" -> BarcodeSymbology.Jan8
+      "jan13", "ean13" -> BarcodeSymbology.Jan13
+      "nw7", "codabar" -> BarcodeSymbology.NW7
+      else -> BarcodeSymbology.Code128
+    }
+    
+    val barcodeParam = BarcodeParameter(content, symbology)
+      .setBarDots(3)
+      .setHeight(height.toDouble())
+      .setPrintHri(printHRI)
+    
+    builder.styleAlignment(Alignment.Center)
+    builder.actionPrintBarcode(barcodeParam)
+    builder.styleAlignment(Alignment.Left)
+  }
+
+  // Execute a QR code command
+  private fun executeQRCodeCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val content = params["content"] as? String ?: return
+    val size = (params["size"] as? Number)?.toInt() ?: 4
+    
+    val qrParam = QRCodeParameter(content)
+      .setLevel(QRCodeLevel.L)
+      .setCellSize(size)
+    
+    builder.styleAlignment(Alignment.Center)
+    builder.actionPrintQRCode(qrParam)
+    builder.styleAlignment(Alignment.Left)
+  }
+
+  // Execute a cut command
+  private fun executeCutCommand(params: Map<String, Any?>, builder: PrinterBuilder) {
+    val cutTypeStr = params["cutType"] as? String ?: "partial"
+    
+    val cutType = when (cutTypeStr) {
+      "full" -> CutType.Full
+      "tearOff" -> CutType.TearOff
+      else -> CutType.Partial
+    }
+    
+    builder.actionCut(cutType)
+  }
+
+  // Create a single-line text bitmap for graphics-only printers
+  private fun createSingleLineTextBitmap(text: String, fontSize: Float, width: Int): Bitmap? {
+    val paint = TextPaint().apply {
+      isAntiAlias = true
+      color = Color.BLACK
+      textSize = fontSize
+      typeface = android.graphics.Typeface.MONOSPACE
+    }
+    
+    val layout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      StaticLayout.Builder
+        .obtain(text, 0, text.length, paint, width)
+        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+        .setIncludePad(false)
+        .build()
+    } else {
+      @Suppress("DEPRECATION")
+      StaticLayout(text, paint, width, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false)
+    }
+    
+    val height = maxOf(layout.height, 10)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    canvas.drawColor(Color.WHITE)
+    layout.draw(canvas)
+    return bitmap
+  }
+
   // Estimate printable width in dots by model family (conservative defaults)
   private fun currentPrintableWidthDots(): Int {
     return try {
@@ -1289,8 +1682,9 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       val tsp100skWidth = 240  // Optimized for TSP100SK label printing
       
       val width = when {
-        // Label printers - render at 576 and let device scale if needed
-        ms.contains("label") -> 576
+        // mcLabel2 is 300 DPI (11.8 dots/mm) on 58mm paper with ~48mm printable area
+        // 48mm × 11.8 = ~566 dots (NOT 384 which would be for 203 DPI)
+        ms.contains("mc_label2") || ms.contains("mc-label2") || ms.contains("label2") -> 566
         // TSP100SK is a 2" label printer but actual printable width appears much narrower
         ms.contains("tsp100iv_sk") || ms.contains("tsp100sk") || ms.contains("_sk") -> {
           println("DEBUG: TSP100SK detected, using $tsp100skWidth dots width")
@@ -1307,6 +1701,11 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   }
 
   private fun currentPrintableWidthMm(): Double {
+    val ms = (printer?.information?.model?.toString() ?: "").lowercase()
+    // mcLabel2 is 300 DPI so 566 dots = 48mm, not 72mm
+    if (ms.contains("mc_label2") || ms.contains("mc-label2") || ms.contains("label2")) {
+      return 48.0
+    }
     val dots = currentPrintableWidthDots()
     // Star thermal printers are ~203dpi (~8 dots/mm)
     return dots / 8.0
@@ -1319,6 +1718,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     return when {
       // TSP650II needs fewer characters per line than other 80mm printers
       modelStr.contains("tsp650") -> 42
+      // mcLabel2 at 300 DPI with 566 dots can fit more characters (~47 chars)
+      modelStr.contains("mc_label2") || modelStr.contains("mc-label2") || modelStr.contains("label2") -> 48
       // Other 80mm printers
       dots >= 576 -> 48
       // 58mm printers  
