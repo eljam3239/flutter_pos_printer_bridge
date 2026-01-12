@@ -499,6 +499,49 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             return
         }
         
+        // NEW: Check for command-based printing approach
+        if let commands = args["commands"] as? [[String: Any]], !commands.isEmpty {
+            print("DEBUG: Using command-based printing with \(commands.count) commands")
+            
+            Task {
+                do {
+                    // Check printer status first
+                    let status = try await self.printer?.getStatus()
+                    if let status = status, status.hasError {
+                        print("WARNING: Printer reports error status before printing")
+                    }
+                    
+                    let builder = StarXpandCommand.StarXpandCommandBuilder()
+                    let printerBuilder = StarXpandCommand.PrinterBuilder()
+                    
+                    // Set international character (matching existing behavior)
+                    _ = printerBuilder.styleInternationalCharacter(.usa)
+                    _ = printerBuilder.styleCharacterSpace(0)
+                    
+                    // Execute all commands
+                    _ = self.executeCommands(commands, printerBuilder: printerBuilder)
+                    
+                    // Build and send
+                    _ = builder.addDocument(StarXpandCommand.DocumentBuilder().addPrinter(printerBuilder))
+                    let command = builder.getCommands()
+                    
+                    try await self.printer?.print(command: command)
+                    
+                    print("Command-based print completed successfully")
+                    DispatchQueue.main.async {
+                        result(nil)
+                    }
+                } catch {
+                    print("Command-based print failed: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "PRINT_FAILED", message: error.localizedDescription, details: nil))
+                    }
+                }
+            }
+            return
+        }
+        
+        // LEGACY: Fall back to existing layout-based approach
         // Read optional layout settings coming from Dart
         let settings = args["settings"] as? [String: Any]
         let layout = settings?["layout"] as? [String: Any]
@@ -1416,6 +1459,382 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
             }
         }
     }
+    
+    // MARK: - Command-Based Printing
+    
+    /// Execute a list of print commands from Dart
+    /// Returns true if commands were executed successfully
+    private func executeCommands(_ commands: [[String: Any]], printerBuilder: StarXpandCommand.PrinterBuilder) -> Bool {
+        guard !commands.isEmpty else { return false }
+        
+        print("DEBUG: Executing \(commands.count) Star print commands")
+        
+        for (index, cmd) in commands.enumerated() {
+            guard let type = cmd["type"] as? String,
+                  let params = cmd["parameters"] as? [String: Any] else {
+                print("WARNING: Invalid command at index \(index)")
+                continue
+            }
+            
+            print("DEBUG: Executing command \(index): \(type)")
+            
+            switch type {
+            case "text":
+                executeTextCommand(params, builder: printerBuilder)
+            case "textLeftRight":
+                executeTextLeftRightCommand(params, builder: printerBuilder)
+            case "textColumns":
+                executeTextColumnsCommand(params, builder: printerBuilder)
+            case "line":
+                executeLineCommand(params, builder: printerBuilder)
+            case "feed":
+                executeFeedCommand(params, builder: printerBuilder)
+            case "image":
+                executeImageCommand(params, builder: printerBuilder)
+            case "barcode":
+                executeBarcodeCommand(params, builder: printerBuilder)
+            case "qrCode":
+                executeQRCodeCommand(params, builder: printerBuilder)
+            case "cut":
+                executeCutCommand(params, builder: printerBuilder)
+            case "openDrawer":
+                // Drawer is handled at document level, skip here
+                print("DEBUG: openDrawer command noted (handled separately)")
+            default:
+                print("WARNING: Unknown command type: \(type)")
+            }
+        }
+        
+        return true
+    }
+    
+    /// Execute a text command
+    private func executeTextCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        guard let text = params["text"] as? String else { return }
+        
+        let align = params["align"] as? String ?? "left"
+        let bold = params["bold"] as? Bool ?? false
+        let underline = params["underline"] as? Bool ?? false
+        let invert = params["invert"] as? Bool ?? false
+        let magWidth = params["magnificationWidth"] as? Int ?? 1
+        let magHeight = params["magnificationHeight"] as? Int ?? 1
+        
+        // Check if this is a graphics-only printer (TSP100III series)
+        let graphicsOnly = isGraphicsOnlyPrinter()
+        
+        if graphicsOnly {
+            // For graphics-only printers, render text as image
+            let fontSize: CGFloat = CGFloat(24 * max(magWidth, magHeight))
+            let targetDots = currentPrintableWidthDots()
+            
+            if let textImage = createTextImage(text: text, fontSize: fontSize, imageWidth: CGFloat(targetDots)) {
+                let param = StarXpandCommand.Printer.ImageParameter(image: textImage, width: targetDots)
+                _ = builder.actionPrintImage(param)
+            }
+        } else {
+            // Native text printing - apply alignment
+            let alignment: StarXpandCommand.Printer.Alignment = {
+                switch align {
+                case "center": return .center
+                case "right": return .right
+                default: return .left
+                }
+            }()
+            _ = builder.styleAlignment(alignment)
+            
+            // Apply styles
+            if bold { _ = builder.styleBold(true) }
+            if underline { _ = builder.styleUnderLine(true) }
+            if invert { _ = builder.styleInvert(true) }
+            if magWidth > 1 || magHeight > 1 {
+                _ = builder.styleMagnification(StarXpandCommand.MagnificationParameter(width: magWidth, height: magHeight))
+            }
+            
+            // Print text
+            _ = builder.actionPrintText(text)
+            
+            // Reset styles
+            if magWidth > 1 || magHeight > 1 {
+                _ = builder.styleMagnification(StarXpandCommand.MagnificationParameter(width: 1, height: 1))
+            }
+            if invert { _ = builder.styleInvert(false) }
+            if underline { _ = builder.styleUnderLine(false) }
+            if bold { _ = builder.styleBold(false) }
+            _ = builder.styleAlignment(.left)
+        }
+    }
+    
+    /// Execute a left-right text command (two texts on same line)
+    private func executeTextLeftRightCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        let left = params["left"] as? String ?? ""
+        let right = params["right"] as? String ?? ""
+        let bold = params["bold"] as? Bool ?? false
+        
+        let graphicsOnly = isGraphicsOnlyPrinter()
+        let totalCPL = currentColumnsPerLine()
+        
+        if bold { _ = builder.styleBold(true) }
+        
+        if graphicsOnly || isTSP650II() {
+            // Manual space padding approach
+            let totalLen = left.count + right.count
+            let spacesNeeded = max(1, totalCPL - totalLen)
+            let paddedLine = left + String(repeating: " ", count: spacesNeeded) + right
+            _ = builder.actionPrintText("\(paddedLine)\n")
+        } else {
+            // Use TextParameter with width for printers that support it
+            let leftWidth = max(8, totalCPL / 2)
+            let rightWidth = max(8, totalCPL - leftWidth)
+            let leftParam = StarXpandCommand.Printer.TextParameter().setWidth(leftWidth)
+            let rightParam = StarXpandCommand.Printer.TextParameter().setWidth(rightWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+            _ = builder.actionPrintText(left, leftParam)
+            _ = builder.actionPrintText("\(right)\n", rightParam)
+        }
+        
+        if bold { _ = builder.styleBold(false) }
+    }
+    
+    /// Execute a multi-column text command
+    private func executeTextColumnsCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        guard let columns = params["columns"] as? [[String: Any]] else { return }
+        let bold = params["bold"] as? Bool ?? false
+        
+        let graphicsOnly = isGraphicsOnlyPrinter()
+        let totalCPL = currentColumnsPerLine()
+        
+        if bold { _ = builder.styleBold(true) }
+        
+        // Calculate total weight
+        let totalWeight = columns.reduce(0) { $0 + (($1["weight"] as? Int) ?? 1) }
+        
+        if graphicsOnly || isTSP650II() {
+            // Manual padding approach - build a single line
+            var line = ""
+            for col in columns {
+                let text = (col["text"] as? String) ?? ""
+                let weight = (col["weight"] as? Int) ?? 1
+                let align = (col["align"] as? String) ?? "left"
+                let colWidth = max(1, (totalCPL * weight) / totalWeight)
+                
+                let paddedText: String
+                switch align {
+                case "right":
+                    if text.count >= colWidth {
+                        paddedText = String(text.prefix(colWidth))
+                    } else {
+                        paddedText = String(repeating: " ", count: colWidth - text.count) + text
+                    }
+                case "center":
+                    let padding = max(0, colWidth - text.count)
+                    let leftPad = padding / 2
+                    let rightPad = padding - leftPad
+                    let truncatedText = text.count > colWidth ? String(text.prefix(colWidth)) : text
+                    paddedText = String(repeating: " ", count: leftPad) + truncatedText + String(repeating: " ", count: rightPad)
+                default: // left
+                    if text.count >= colWidth {
+                        paddedText = String(text.prefix(colWidth))
+                    } else {
+                        paddedText = text + String(repeating: " ", count: colWidth - text.count)
+                    }
+                }
+                line += paddedText
+            }
+            _ = builder.actionPrintText("\(line)\n")
+        } else {
+            // Use TextParameter with widths
+            for (index, col) in columns.enumerated() {
+                let text = (col["text"] as? String) ?? ""
+                let weight = (col["weight"] as? Int) ?? 1
+                let align = (col["align"] as? String) ?? "left"
+                let colWidth = max(4, (totalCPL * weight) / totalWeight)
+                
+                let isLast = index == columns.count - 1
+                let textToPrint = isLast ? "\(text)\n" : text
+                
+                if align == "right" {
+                    let param = StarXpandCommand.Printer.TextParameter().setWidth(colWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.right))
+                    _ = builder.actionPrintText(textToPrint, param)
+                } else if align == "center" {
+                    let param = StarXpandCommand.Printer.TextParameter().setWidth(colWidth, StarXpandCommand.Printer.TextWidthParameter().setAlignment(.center))
+                    _ = builder.actionPrintText(textToPrint, param)
+                } else {
+                    let param = StarXpandCommand.Printer.TextParameter().setWidth(colWidth)
+                    _ = builder.actionPrintText(textToPrint, param)
+                }
+            }
+        }
+        
+        if bold { _ = builder.styleBold(false) }
+    }
+    
+    /// Execute a horizontal line command
+    private func executeLineCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        let dashed = params["dashed"] as? Bool ?? false
+        let fullWidthMm = currentPrintableWidthMm()
+        
+        let graphicsOnly = isGraphicsOnlyPrinter()
+        
+        if graphicsOnly {
+            // Print dashes as text for graphics-only printers
+            let charCount = currentColumnsPerLine()
+            let lineChar = dashed ? "-" : "-"
+            let lineText = String(repeating: lineChar, count: charCount)
+            _ = builder.actionPrintText("\(lineText)\n")
+        } else {
+            // Use ruled line
+            let param = StarXpandCommand.Printer.RuledLineParameter(width: fullWidthMm)
+            _ = builder.actionPrintRuledLine(param)
+        }
+    }
+    
+    /// Execute a line feed command
+    private func executeFeedCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        let lines = params["lines"] as? Int ?? 1
+        _ = builder.actionFeedLine(lines)
+    }
+    
+    /// Execute an image command
+    private func executeImageCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        guard let base64 = params["base64"] as? String else { return }
+        let width = params["width"] as? Int ?? 200
+        let align = params["align"] as? String ?? "center"
+        
+        guard let image = decodeBase64Image(base64) else {
+            print("WARNING: Failed to decode image from base64")
+            return
+        }
+        
+        let targetDots = currentPrintableWidthDots()
+        let clampedWidth = max(8, min(width, targetDots))
+        
+        // Flatten and optionally center the image
+        guard let flatImage = flattenImage(image, targetWidth: clampedWidth) else { return }
+        
+        let finalImage: UIImage
+        if align == "center" {
+            finalImage = centerOnCanvas(image: flatImage, canvasWidth: targetDots) ?? flatImage
+        } else {
+            finalImage = flatImage
+        }
+        
+        let alignment: StarXpandCommand.Printer.Alignment = {
+            switch align {
+            case "center": return .center
+            case "right": return .right
+            default: return .left
+            }
+        }()
+        
+        _ = builder.styleAlignment(alignment)
+        let param = StarXpandCommand.Printer.ImageParameter(image: finalImage, width: align == "center" ? targetDots : clampedWidth)
+        _ = builder.actionPrintImage(param)
+        _ = builder.styleAlignment(.left)
+    }
+    
+    /// Execute a barcode command
+    private func executeBarcodeCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        guard let content = params["content"] as? String else { return }
+        let symbologyStr = params["symbology"] as? String ?? "code128"
+        let height = params["height"] as? Int ?? 50
+        let printHRI = params["printHRI"] as? Bool ?? true
+        let barDots = params["barDots"] as? Int ?? 3
+        let align = params["align"] as? String ?? "center"
+        
+        // Map symbology string to StarIO10 enum
+        let symbology: StarXpandCommand.Printer.BarcodeSymbology = {
+            switch symbologyStr {
+            case "code39": return .code39
+            case "jan8": return .jan8
+            case "jan13": return .jan13
+            case "upcA": return .upcA
+            case "upcE": return .upcE
+            case "itf": return .itf
+            case "codabar": return .nw7
+            default: return .code128
+            }
+        }()
+        
+        let alignment: StarXpandCommand.Printer.Alignment = {
+            switch align {
+            case "center": return .center
+            case "right": return .right
+            default: return .left
+            }
+        }()
+        
+        _ = builder.styleAlignment(alignment)
+        
+        let barcodeParam = StarXpandCommand.Printer.BarcodeParameter(content: content, symbology: symbology)
+            .setBarDots(barDots)
+            .setHeight(Double(height))
+            .setPrintHRI(printHRI)
+        
+        _ = builder.actionPrintBarcode(barcodeParam)
+        _ = builder.styleAlignment(.left)
+    }
+    
+    /// Execute a QR code command
+    private func executeQRCodeCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        guard let content = params["content"] as? String else { return }
+        let cellSize = params["cellSize"] as? Int ?? 8
+        let levelStr = params["level"] as? String ?? "L"
+        let align = params["align"] as? String ?? "center"
+        
+        let level: StarXpandCommand.Printer.QRCodeLevel = {
+            switch levelStr.uppercased() {
+            case "M": return .m
+            case "Q": return .q
+            case "H": return .h
+            default: return .l
+            }
+        }()
+        
+        let alignment: StarXpandCommand.Printer.Alignment = {
+            switch align {
+            case "center": return .center
+            case "right": return .right
+            default: return .left
+            }
+        }()
+        
+        _ = builder.styleAlignment(alignment)
+        
+        let qrParam = StarXpandCommand.Printer.QRCodeParameter(content: content)
+            .setCellSize(cellSize)
+            .setLevel(level)
+        
+        _ = builder.actionPrintQRCode(qrParam)
+        _ = builder.styleAlignment(.left)
+    }
+    
+    /// Execute a cut command
+    private func executeCutCommand(_ params: [String: Any], builder: StarXpandCommand.PrinterBuilder) {
+        let cutTypeStr = params["cutType"] as? String ?? "partial"
+        
+        let cutType: StarXpandCommand.Printer.CutType = {
+            switch cutTypeStr {
+            case "full": return .full
+            case "tearOff": return .tearOff
+            default: return .partial
+            }
+        }()
+        
+        _ = builder.actionCut(cutType)
+    }
+    
+    /// Check if current printer is graphics-only (TSP100III series)
+    private func isGraphicsOnlyPrinter() -> Bool {
+        guard let model = self.printer?.information?.model else { return false }
+        return model == .tsp100IIIW || model.rawValue == 7 // tsp100IIIBI
+    }
+    
+    /// Check if current printer is TSP650II (doesn't support setWidth)
+    private func isTSP650II() -> Bool {
+        let modelStr = self.printer?.information?.model.description.lowercased() ?? ""
+        return modelStr.contains("tsp650")
+    }
+    
+    // MARK: - Helper Functions
     
     // Helper: create a barcode image using iOS Core Image
     private func createBarcodeImage(content: String, symbology: String, width: CGFloat, height: CGFloat) -> UIImage? {

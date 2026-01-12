@@ -64,16 +64,22 @@ enum StarInterfaceType {
 class PrintJob {
   final String content;
   final Map<String, dynamic>? settings;
+  
+  /// Command-based printing (new approach)
+  /// When provided, native code will execute these commands instead of parsing settings
+  final List<Map<String, dynamic>>? commands;
 
   const PrintJob({
     required this.content,
     this.settings,
+    this.commands,
   });
 
   Map<String, dynamic> toMap() {
     return {
       'content': content,
       'settings': settings,
+      if (commands != null) 'commands': commands,
     };
   }
 }

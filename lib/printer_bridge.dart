@@ -7,6 +7,8 @@ import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
 
+import 'star_commands.dart';
+
 /// Epson printer configuration
 class EpsonConfig {
   String _paperWidth = '80mm'; // Default to 80mm for Epson
@@ -1607,72 +1609,17 @@ class PrinterBridge {
 
   static Future<bool> _printStarReceipt(PrinterReceiptData receiptData) async {
     try {
-      // Use StarConfig to get proper printable area based on configured paper width
-      final printableAreaMm = PrinterBridge.starConfig.printableAreaMm;
       final paperWidthMm = PrinterBridge.starConfig.paperWidthMm;
+      debugPrint('Star receipt - using ${paperWidthMm}mm paper (command-based approach)');
       
-      debugPrint('Star receipt - using ${paperWidthMm}mm paper, printableAreaMm: $printableAreaMm');
+      // Build commands in Dart - all layout logic lives here
+      final commands = _buildStarReceiptCommands(receiptData);
       
-      // Build structured layout settings to be interpreted by native layers
-      // This follows the same pattern as main.dart _printStarReceipt()
-      final layoutSettings = {
-        'layout': {
-          'header': {
-            'title': receiptData.storeName,
-            'align': 'center',
-            'fontSize': 32, // Default header font size from main.dart
-            'spacingLines': 1,
-          },
-          'details': {
-            'locationText': receiptData.storeAddress,
-            'date': receiptData.date,
-            'time': receiptData.time,
-            'cashier': receiptData.cashierName ?? '',
-            'receiptNum': receiptData.receiptNumber ?? '',
-            'lane': receiptData.laneNumber ?? '',
-            'footer': receiptData.thankYouMessage ?? 'Thank you for your business!',
-            'printableAreaMm': printableAreaMm,
-            'receiptTitle': receiptData.receiptTitle, // Pass the configurable receipt title
-            'isGiftReceipt': receiptData.isGiftReceipt, // Pass gift receipt flag to native layers
-            // Financial summary fields - only include if not a gift receipt
-            if (!receiptData.isGiftReceipt) ...{
-              'subtotal': receiptData.subtotal?.toStringAsFixed(2),
-              'discounts': receiptData.discounts?.toStringAsFixed(2), 
-              'hst': receiptData.hst?.toStringAsFixed(2),
-              'gst': receiptData.gst?.toStringAsFixed(2),
-              'total': receiptData.total?.toStringAsFixed(2),
-              // Payment methods breakdown
-              'payments': receiptData.payments?.map((method, amount) => 
-                MapEntry(method, amount.toStringAsFixed(2))),
-            },
-          },
-          'items': receiptData.items.map((item) => {
-            'quantity': item.quantity.toString(),
-            'name': item.itemName,
-            // For gift receipts, exclude price information
-            if (!receiptData.isGiftReceipt) 'price': item.unitPrice.toStringAsFixed(2),
-          }).toList(),
-          'returnItems': receiptData.returnItems?.map((returnItem) => {
-            'quantity': returnItem.quantity.toString(),
-            'name': returnItem.itemName,
-            // For gift receipts, exclude price information
-            if (!receiptData.isGiftReceipt) 'price': returnItem.unitPrice.toStringAsFixed(2),
-          }).toList(),
-          'image': receiptData.logoBase64 == null
-              ? null
-              : {
-                  'base64': receiptData.logoBase64,
-                  'mime': 'image/png',
-                  'align': 'center',
-                  'width': 200, // Default image width from main.dart
-                  'spacingLines': 1,
-                },
-        },
-      };
-
+      debugPrint('Star receipt - built ${commands.length} commands');
+      
       final printJob = star.PrintJob(
         content: '',
-        settings: layoutSettings,
+        commands: commands.map((cmd) => cmd.toMap()).toList(),
       );
       
       debugPrint('Sending Star receipt to printer...');
@@ -1684,6 +1631,200 @@ class PrinterBridge {
       debugPrint('Star receipt print failed: $e');
       return false;
     }
+  }
+
+  /// Build Star print commands from universal receipt data
+  /// All receipt layout logic lives here in Dart
+  static List<StarPrintCommand> _buildStarReceiptCommands(PrinterReceiptData receiptData) {
+    final List<StarPrintCommand> cmds = [];
+
+    // 1. HEADER - Store name (centered, large)
+    if (receiptData.storeName.isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${receiptData.storeName}\n',
+        align: StarAlignment.center,
+        bold: true,
+        magnificationWidth: 2,
+        magnificationHeight: 2,
+      ));
+      cmds.add(StarPrintCommand.feed(1));
+    }
+
+    // 2. LOGO IMAGE (if provided)
+    if (receiptData.logoBase64 != null && receiptData.logoBase64!.isNotEmpty) {
+      cmds.add(StarPrintCommand.image(
+        receiptData.logoBase64!,
+        width: 200,
+        align: StarAlignment.center,
+      ));
+      cmds.add(StarPrintCommand.feed(1));
+    }
+
+    // 3. STORE ADDRESS (centered)
+    if (receiptData.storeAddress.isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${receiptData.storeAddress}\n',
+        align: StarAlignment.center,
+      ));
+    }
+
+    // 4. STORE PHONE (centered, if provided)
+    if (receiptData.storePhone != null && receiptData.storePhone!.isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${receiptData.storePhone}\n',
+        align: StarAlignment.center,
+      ));
+    }
+
+    cmds.add(StarPrintCommand.feed(1));
+
+    // 5. RECEIPT TITLE (centered)
+    cmds.add(StarPrintCommand.text(
+      '${receiptData.receiptTitle}\n',
+      align: StarAlignment.center,
+      bold: true,
+    ));
+
+    // 6. DATE/TIME and CASHIER (left-right on same line)
+    final dateTimeStr = '${receiptData.date} ${receiptData.time}';
+    final cashierStr = receiptData.cashierName != null && receiptData.cashierName!.isNotEmpty
+        ? 'Cashier: ${receiptData.cashierName}'
+        : '';
+    
+    if (dateTimeStr.trim().isNotEmpty || cashierStr.isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(dateTimeStr, cashierStr));
+    }
+
+    // 7. RECEIPT NUMBER and LANE (left-right on same line)
+    final receiptNumStr = receiptData.receiptNumber != null && receiptData.receiptNumber!.isNotEmpty
+        ? 'Receipt No: ${receiptData.receiptNumber}'
+        : '';
+    final laneStr = receiptData.laneNumber != null && receiptData.laneNumber!.isNotEmpty
+        ? 'Lane: ${receiptData.laneNumber}'
+        : '';
+    
+    if (receiptNumStr.isNotEmpty || laneStr.isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(receiptNumStr, laneStr));
+    }
+
+    cmds.add(StarPrintCommand.feed(1));
+    cmds.add(StarPrintCommand.line());
+
+    // 8. LINE ITEMS
+    for (final item in receiptData.items) {
+      if (receiptData.isGiftReceipt) {
+        // Gift receipt: quantity x name only (no price)
+        cmds.add(StarPrintCommand.text(
+          '${item.quantity} x ${item.itemName}\n',
+        ));
+      } else {
+        // Regular receipt: quantity | name | price columns
+        cmds.add(StarPrintCommand.textColumns([
+          StarColumn(text: '${item.quantity}x', weight: 1, align: StarAlignment.left),
+          StarColumn(text: item.itemName, weight: 5, align: StarAlignment.left),
+          StarColumn(text: item.totalPrice.toStringAsFixed(2), weight: 2, align: StarAlignment.right),
+        ]));
+      }
+    }
+
+    // 9. RETURN ITEMS (if any)
+    if (receiptData.returnItems != null && receiptData.returnItems!.isNotEmpty) {
+      cmds.add(StarPrintCommand.feed(1));
+      cmds.add(StarPrintCommand.text('Returns\n', bold: true));
+      
+      for (final returnItem in receiptData.returnItems!) {
+        if (receiptData.isGiftReceipt) {
+          cmds.add(StarPrintCommand.text(
+            '${returnItem.quantity} x ${returnItem.itemName}\n',
+          ));
+        } else {
+          cmds.add(StarPrintCommand.textColumns([
+            StarColumn(text: '${returnItem.quantity}x', weight: 1, align: StarAlignment.left),
+            StarColumn(text: returnItem.itemName, weight: 5, align: StarAlignment.left),
+            StarColumn(text: '-${returnItem.unitPrice.toStringAsFixed(2)}', weight: 2, align: StarAlignment.right),
+          ]));
+        }
+      }
+    }
+
+    cmds.add(StarPrintCommand.line());
+
+    // 10. FINANCIAL SUMMARY (skip for gift receipts)
+    if (!receiptData.isGiftReceipt) {
+      if (receiptData.subtotal != null) {
+        cmds.add(StarPrintCommand.textLeftRight(
+          'Subtotal',
+          receiptData.subtotal!.toStringAsFixed(2),
+        ));
+      }
+      
+      if (receiptData.discounts != null && receiptData.discounts! != 0) {
+        cmds.add(StarPrintCommand.textLeftRight(
+          'Discounts',
+          '-${receiptData.discounts!.toStringAsFixed(2)}',
+        ));
+      }
+      
+      if (receiptData.hst != null && receiptData.hst! != 0) {
+        cmds.add(StarPrintCommand.textLeftRight(
+          'HST',
+          receiptData.hst!.toStringAsFixed(2),
+        ));
+      }
+      
+      if (receiptData.gst != null && receiptData.gst! != 0) {
+        cmds.add(StarPrintCommand.textLeftRight(
+          'GST',
+          receiptData.gst!.toStringAsFixed(2),
+        ));
+      }
+      
+      cmds.add(StarPrintCommand.line());
+      
+      // Total (larger font)
+      if (receiptData.total != null) {
+        cmds.add(StarPrintCommand.textLeftRight('Total', ''));
+        cmds.add(StarPrintCommand.text(
+          '${receiptData.total!.toStringAsFixed(2)}\n',
+          align: StarAlignment.right,
+          magnificationWidth: 2,
+          magnificationHeight: 2,
+        ));
+      }
+      
+      cmds.add(StarPrintCommand.line());
+
+      // 11. PAYMENT METHODS
+      if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
+        cmds.add(StarPrintCommand.text(
+          'Payment Method\n',
+          align: StarAlignment.center,
+        ));
+        
+        for (final entry in receiptData.payments!.entries) {
+          cmds.add(StarPrintCommand.textLeftRight(
+            entry.key,
+            '${entry.value.toStringAsFixed(2)}',
+          ));
+        }
+        cmds.add(StarPrintCommand.feed(1));
+      }
+    }
+
+    // 12. THANK YOU MESSAGE
+    if (receiptData.thankYouMessage != null && receiptData.thankYouMessage!.isNotEmpty) {
+      cmds.add(StarPrintCommand.feed(1));
+      cmds.add(StarPrintCommand.text(
+        '${receiptData.thankYouMessage}\n',
+        align: StarAlignment.center,
+      ));
+    }
+
+    // 13. FEED AND CUT
+    cmds.add(StarPrintCommand.feed(3));
+    cmds.add(StarPrintCommand.cut());
+
+    return cmds;
   }
 
   static Future<bool> _printStarLabel(PrinterLabelData labelData) async {
