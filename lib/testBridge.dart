@@ -74,7 +74,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+    _epsonPaperWidth = '80mm'; // Default
     _starPaperWidthMm = PrinterBridge.starConfig.paperWidthMm;
   }
 
@@ -311,7 +311,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   if (newValue != null) {
                     setState(() {
                       _epsonPaperWidth = newValue;
-                      PrinterBridge.epsonConfig.setPaperWidth(newValue);
                     });
                     debugPrint('📏 Paper width manually set to: $newValue');
                   }
@@ -319,7 +318,7 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Characters per line: ${PrinterBridge.epsonConfig.charactersPerLine}',
+                'Characters per line: ${EpsonConfig.getCharactersPerLine(_epsonPaperWidth)}',
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
               ),
             ],
@@ -690,9 +689,9 @@ class _MyHomePageState extends State<MyHomePage> {
         try {
           final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
           if (detectedWidth != null && mounted) {
-            // Update UI state to reflect the auto-updated config
+            // Update UI state with detected width
             setState(() {
-              _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+              _epsonPaperWidth = detectedWidth;
             });
             
             ScaffoldMessenger.of(context).showSnackBar(
@@ -804,9 +803,9 @@ class _MyHomePageState extends State<MyHomePage> {
       final detectedWidth = await PrinterBridge.detectPaperWidth(_selectedBrand!.name);
       
       if (detectedWidth != null) {
-        // Update UI state to reflect the auto-updated config
+        // Update UI state with detected width
         setState(() {
-          _epsonPaperWidth = PrinterBridge.epsonConfig.paperWidth;
+          _epsonPaperWidth = detectedWidth;
         });
         
         if (!mounted) return;
@@ -917,8 +916,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // Financial summary data
       subtotal: 293.00,
       discounts: 0.00,
-      hst: 29.30,
-      gst: 8.790,
+      taxes: {'HST': 29.30, 'GST': 8.79},
       total: 331.09,
 
       //payment
@@ -986,8 +984,7 @@ class _MyHomePageState extends State<MyHomePage> {
         items: baseReceiptData.items,
         subtotal: baseReceiptData.subtotal,
         discounts: baseReceiptData.discounts,
-        hst: baseReceiptData.hst,
-        gst: baseReceiptData.gst,
+        taxes: baseReceiptData.taxes,
         total: baseReceiptData.total,
         payments: baseReceiptData.payments,
         thankYouMessage: baseReceiptData.thankYouMessage,

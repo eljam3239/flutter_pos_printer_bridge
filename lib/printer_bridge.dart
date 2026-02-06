@@ -7,29 +7,16 @@ import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
 
+import '../../../utils/global_keys.dart';
 import 'star_commands.dart';
 
 /// Epson printer configuration
 class EpsonConfig {
-  String _paperWidth = '80mm'; // Default to 80mm for Epson
   static const List<String> availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
 
-  /// Get current Epson paper width setting
-  String get paperWidth => _paperWidth;
-
-  /// Set Epson paper width (must be one of the available widths)
-  void setPaperWidth(String width) {
-    if (availablePaperWidths.contains(width)) {
-      _paperWidth = width;
-      debugPrint('PrinterBridge: Epson paper width set to $width');
-    } else {
-      debugPrint('PrinterBridge: Invalid paper width $width. Available: $availablePaperWidths');
-    }
-  }
-
-  /// Get characters per line based on current paper width
-  int get charactersPerLine {
-    switch (_paperWidth) {
+  /// Get characters per line based on paper width
+  static int getCharactersPerLine(String paperWidth) {
+    switch (paperWidth) {
       case '58mm': return 35; // 58mm - more conservative to match real 58mm behavior
       case '60mm': return 34; // 60mm typically 34 chars  
       case '70mm': return 42; // 70mm typically 42 chars
@@ -75,6 +62,78 @@ class StarConfig {
       case 58: return 'mixed'; // Mixed layout with some horizontal elements
       case 80: return 'horizontal'; // Full horizontal layout for wide labels
       default: return 'mixed'; // Fallback to 58mm
+    }
+  }
+}
+
+/// Zebra printer configuration
+class ZebraConfig {
+  int _printWidthInDots = 637;    // Default from typical 4" printer
+  int _labelLengthInDots = 1476;  // Default from typical 4x6" label
+  int _dpi = 203;                 // Standard Zebra DPI
+
+  /// Get current Zebra print width in dots
+  int get printWidthInDots => _printWidthInDots;
+
+  /// Get current Zebra label length in dots
+  int get labelLengthInDots => _labelLengthInDots;
+
+  /// Get current Zebra DPI
+  int get dpi => _dpi;
+
+  /// Set Zebra dimensions (updates all three values)
+  void setDimensions({
+    required int printWidthInDots,
+    required int labelLengthInDots,
+    required int dpi,
+  }) {
+    _printWidthInDots = printWidthInDots;
+    _labelLengthInDots = labelLengthInDots;
+    _dpi = dpi;
+    debugPrint('PrinterBridge: Zebra dimensions set to ${printWidthInDots}x${labelLengthInDots} @ ${dpi}dpi');
+  }
+
+  /// Set only label length (useful for dynamic receipt sizing)
+  void setLabelLength(int labelLengthInDots) {
+    _labelLengthInDots = labelLengthInDots;
+    debugPrint('PrinterBridge: Zebra label length set to $labelLengthInDots dots');
+  }
+
+  /// Convert config to Map for SavedPrinter.settings storage
+  Map<String, dynamic> toMap() => {
+    'printWidthInDots': _printWidthInDots,
+    'labelLengthInDots': _labelLengthInDots,
+    'dpi': _dpi,
+  };
+
+  /// Load config from SavedPrinter.settings Map
+  /// Handles both flat structure (printWidthInDots at root) and nested (detectedDimensions.printWidthInDots)
+  void fromMap(Map<String, dynamic> settings) {
+    Map<String, dynamic>? dims;
+    
+    // Check for flat structure first
+    if (settings.containsKey('printWidthInDots') &&
+        settings.containsKey('labelLengthInDots') &&
+        settings.containsKey('dpi')) {
+      dims = settings;
+    }
+    // Check for nested detectedDimensions structure
+    else if (settings.containsKey('detectedDimensions')) {
+      final nested = settings['detectedDimensions'];
+      if (nested is Map<String, dynamic> &&
+          nested.containsKey('printWidthInDots') &&
+          nested.containsKey('labelLengthInDots') &&
+          nested.containsKey('dpi')) {
+        dims = nested;
+      }
+    }
+    
+    if (dims != null) {
+      // Use (num).toInt() for safe casting after JSON deserialization
+      _printWidthInDots = (dims['printWidthInDots'] as num).toInt();
+      _labelLengthInDots = (dims['labelLengthInDots'] as num).toInt();
+      _dpi = (dims['dpi'] as num).toInt();
+      debugPrint('PrinterBridge: Zebra config loaded from settings: ${_printWidthInDots}x${_labelLengthInDots} @ ${_dpi}dpi');
     }
   }
 }
@@ -130,8 +189,9 @@ class PrinterReceiptData {
   // Financial summary fields
   final double? subtotal;
   final double? discounts;
-  final double? hst;
-  final double? gst;
+  /// Generic tax breakdown - maps tax name (e.g., 'HST', 'GST', 'PST', 'VAT', etc.) to amount
+  /// Supports any tax type from order_tax_breakdown
+  final Map<String, double>? taxes;
   final double? total;
   // Payment methods breakdown
   final Map<String, num>? payments;
@@ -155,8 +215,7 @@ class PrinterReceiptData {
     // Financial summary parameters
     this.subtotal,
     this.discounts,
-    this.hst,
-    this.gst,
+    this.taxes,
     this.total,
     // Payment methods parameter
     this.payments,
@@ -185,15 +244,60 @@ class PrinterLabelData {
   });
 }
 
+/// PrinterBridge provides unified methods for printer discovery, connection, and configuration, acting as the interface between the app's receipt/label services and the underlying printer SDKs.
 class PrinterBridge {
-  /// Epson printer configuration
-  static final EpsonConfig epsonConfig = EpsonConfig();
-  
   /// Star printer configuration
   static final StarConfig starConfig = StarConfig();
   
-  /// Cached Zebra printer dimensions to avoid repeated API calls
-  static Map<String, int>? _cachedZebraDimensions;
+  /// Zebra printer configuration
+  static final ZebraConfig zebraConfig = ZebraConfig();
+
+  /// Get characters per line for Epson based on explicit paper width
+  static int _getEpsonCharsPerLine(String? epsonWidth) {
+    return EpsonConfig.getCharactersPerLine(epsonWidth ?? '80mm');
+  }
+
+  /// Get characters per line for Star based on paper width in mm
+  static int _getStarCharsPerLine(int paperWidthMm) {
+    switch (paperWidthMm) {
+      case 38: return 24;
+      case 58: return 32;
+      case 80: return 48;
+      default: return 42;
+    }
+  }
+
+  /// Wrap long text to fit within the specified character width
+  /// Shared helper used by Epson, Star, and Zebra receipt builders
+  static List<String> wrapText(String text, int maxWidth) {
+    text = text.trim();
+    if (text.isEmpty) return [];
+
+    final List<String> lines = [];
+    final words = text.split(' ');
+    String currentLine = '';
+
+    for (String word in words) {
+      final testLine = currentLine.isEmpty ? word : '$currentLine $word';
+      if (testLine.length <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        if (currentLine.isNotEmpty) {
+          lines.add(currentLine);
+          currentLine = word;
+        } else {
+          // Single word longer than maxWidth - just add it
+          lines.add(word);
+        }
+      }
+    }
+
+    if (currentLine.isNotEmpty) {
+      lines.add(currentLine);
+    }
+
+    return lines;
+  }
 
   /// Discover printers for a specific brand
   /// Returns list of discovered printers with their connection details
@@ -227,7 +331,7 @@ class PrinterBridge {
       final lanPrinters = await EpsonPrinter.discoverPrinters();
       allPrinters.addAll(lanPrinters);
     } catch (e) {
-      debugPrint('Epson LAN discovery error: $e');
+      debugPrint('PrinterBridge: Epson LAN discovery error: $e');
     }
 
     // Small delay between discoveries
@@ -240,7 +344,7 @@ class PrinterBridge {
       final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
       allPrinters.addAll(btPrinters);
     } catch (e) {
-      debugPrint('Epson Bluetooth discovery error: $e');
+      debugPrint('PrinterBridge: Epson Bluetooth discovery error: $e');
     }
 
     // Small delay before USB
@@ -368,7 +472,7 @@ class PrinterBridge {
           'Zebra network discovery found ${networkPrinters.length} printers',
         );
       } catch (e) {
-        debugPrint('Zebra network discovery failed: $e');
+        debugPrint('PrinterBridge: Zebra network discovery failed: $e');
       }
 
       // Bluetooth discovery (works on all platforms)
@@ -380,7 +484,7 @@ class PrinterBridge {
           'Zebra Bluetooth discovery found ${bluetoothPrinters.length} printers',
         );
       } catch (e) {
-        debugPrint('Zebra Bluetooth discovery failed: $e');
+        debugPrint('PrinterBridge: Zebra Bluetooth discovery failed: $e');
       }
 
       // USB discovery (Android only)
@@ -390,11 +494,11 @@ class PrinterBridge {
           allPrinters.addAll(usbPrinters);
           debugPrint('Zebra USB discovery found ${usbPrinters.length} printers');
         } catch (e) {
-          debugPrint('Zebra USB discovery failed: $e');
+          debugPrint('PrinterBridge: Zebra USB discovery failed: $e');
         }
       }
     } catch (e) {
-      debugPrint('Zebra discovery failed: $e');
+      debugPrint('PrinterBridge: Zebra discovery failed: $e');
       rethrow;
     }
 
@@ -493,7 +597,6 @@ class PrinterBridge {
 
   /// Detect paper width for Epson printers
   /// Returns detected width string (e.g., '58mm', '80mm') or null if detection fails
-  /// Also automatically updates EpsonConfig.paperWidth if detection succeeds
   static Future<String?> detectPaperWidth(String brand) async {
     if (brand.toLowerCase() != 'epson') {
       debugPrint('Paper width detection only supported for Epson printers');
@@ -503,13 +606,6 @@ class PrinterBridge {
     try {
       String detectedWidth = await EpsonPrinter.detectPaperWidth();
       debugPrint('PrinterBridge: Detected paper width: $detectedWidth');
-      
-      // Auto-update the EpsonConfig if detected width is valid
-      if (EpsonConfig.availablePaperWidths.contains(detectedWidth)) {
-        PrinterBridge.epsonConfig.setPaperWidth(detectedWidth);
-        debugPrint('PrinterBridge: Auto-updated paper width setting to $detectedWidth');
-      }
-      
       return detectedWidth;
     } catch (e) {
       debugPrint('PrinterBridge: Paper width detection failed: $e');
@@ -518,23 +614,35 @@ class PrinterBridge {
   }
 
   /// Get Zebra printer dimensions (width, height, DPI, etc.)
-  /// Returns cached dimensions if available, otherwise fetches fresh data
+  /// Returns dimensions from zebraConfig, or fetches fresh if forceRefresh=true
   /// Only works for Zebra printers - returns null for other brands
   static Future<Map<String, int>?> getZebraDimensions({bool forceRefresh = false}) async {
-    if (!forceRefresh && _cachedZebraDimensions != null) {
-      debugPrint('PrinterBridge: Using cached Zebra dimensions');
-      return Map<String, int>.from(_cachedZebraDimensions!);
+    if (!forceRefresh) {
+      debugPrint('PrinterBridge: Using Zebra dimensions from config');
+      return {
+        'printWidthInDots': zebraConfig.printWidthInDots,
+        'labelLengthInDots': zebraConfig.labelLengthInDots,
+        'dpi': zebraConfig.dpi,
+      };
     }
 
     try {
       debugPrint('PrinterBridge: Fetching fresh Zebra dimensions...');
       final dimensions = await ZebraPrinter.getPrinterDimensions();
       
-      // Cache the dimensions for future use
-      _cachedZebraDimensions = Map<String, int>.from(dimensions);
+      // Update zebraConfig with fetched dimensions
+      zebraConfig.setDimensions(
+        printWidthInDots: (dimensions['printWidthInDots'] as num?)?.toInt() ?? 637,
+        labelLengthInDots: (dimensions['labelLengthInDots'] as num?)?.toInt() ?? 1476,
+        dpi: (dimensions['dpi'] as num?)?.toInt() ?? 203,
+      );
       
-      debugPrint('PrinterBridge: Zebra dimensions cached: $_cachedZebraDimensions');
-      return Map<String, int>.from(_cachedZebraDimensions!);
+      debugPrint('PrinterBridge: Zebra config updated');
+      return {
+        'printWidthInDots': zebraConfig.printWidthInDots,
+        'labelLengthInDots': zebraConfig.labelLengthInDots,
+        'dpi': zebraConfig.dpi,
+      };
     } catch (e) {
       debugPrint('PrinterBridge: Failed to get Zebra dimensions: $e');
       return null;
@@ -542,16 +650,15 @@ class PrinterBridge {
   }
 
   /// Set Zebra printer label length in dots
-  /// Also clears cached dimensions to force refresh on next access
+  /// Updates zebraConfig to reflect the new length
   /// Only works for Zebra printers
   static Future<bool> setZebraLabelLength(int lengthInDots) async {
     try {
       debugPrint('PrinterBridge: Setting Zebra label length to $lengthInDots dots');
       await ZebraPrinter.setLabelLength(lengthInDots);
       
-      // Clear cached dimensions since we changed the label length
-      _cachedZebraDimensions = null;
-      debugPrint('PrinterBridge: Cleared cached dimensions after label length change');
+      // Update zebraConfig with new length
+      zebraConfig.setLabelLength(lengthInDots);
       
       return true;
     } catch (e) {
@@ -586,8 +693,12 @@ class PrinterBridge {
       await ZebraPrinter.setLabelLength(heightInDots);
       await ZebraPrinter.setSgdParameter('ezpl.label_length_max', heightInches.toString());
       
-      // Clear cached dimensions to force refresh
-      _cachedZebraDimensions = null;
+      // Update zebraConfig with new dimensions
+      zebraConfig.setDimensions(
+        printWidthInDots: widthInDots,
+        labelLengthInDots: heightInDots,
+        dpi: effectiveDpi,
+      );
       debugPrint('PrinterBridge: Zebra dimensions set successfully');
       
       return true;
@@ -597,10 +708,14 @@ class PrinterBridge {
     }
   }
 
-  /// Clear cached Zebra dimensions (useful after printer reconnection)
-  static void clearZebraDimensionCache() {
-    _cachedZebraDimensions = null;
-    debugPrint('PrinterBridge: Zebra dimension cache cleared');
+  /// Reset Zebra config to default dimensions (useful for cleanup/testing)
+  static void resetZebraConfig() {
+    zebraConfig.setDimensions(
+      printWidthInDots: 637,
+      labelLengthInDots: 1476,
+      dpi: 203,
+    );
+    debugPrint('PrinterBridge: Zebra config reset to defaults');
   }
 
   /// Generate ZPL commands for Zebra receipt printing
@@ -721,9 +836,6 @@ class PrinterBridge {
       await ZebraPrinter.connect(settings);
       debugPrint('Zebra connection successful');
 
-      // Clear cached dimensions to ensure fresh data after new connection
-      clearZebraDimensionCache();
-
       // Add small delay to ensure connection is fully established
       await Future.delayed(const Duration(milliseconds: 500));
 
@@ -771,10 +883,11 @@ class PrinterBridge {
     String brand,
     PrinterReceiptData receiptData, {
     Map<String, int>? dimensions,
+    String? epsonWidth,
   }) async {
     switch (brand.toLowerCase()) {
       case 'epson':
-        return _printEpsonReceipt(receiptData);
+        return _printEpsonReceipt(receiptData, epsonWidth);
       case 'star':
         return _printStarReceipt(receiptData);
       case 'zebra':
@@ -814,10 +927,10 @@ class PrinterBridge {
     }
   }
 
-  static Future<bool> _printEpsonReceipt(PrinterReceiptData receiptData) async {
+  static Future<bool> _printEpsonReceipt(PrinterReceiptData receiptData, String? epsonWidth) async {
     try {
       // Build Epson commands from universal receipt data
-      final commands = _buildEpsonReceiptCommands(receiptData);
+      final commands = _buildEpsonReceiptCommands(receiptData, epsonWidth);
 
       if (commands.isEmpty) {
         debugPrint('Epson receipt has no content');
@@ -836,45 +949,15 @@ class PrinterBridge {
 
   static List<EpsonPrintCommand> _buildEpsonReceiptCommands(
     PrinterReceiptData receiptData,
+    String? epsonWidth,
   ) {
     final List<EpsonPrintCommand> cmds = [];
 
-    // Calculate the correct characters per line based on detected paper width
-    final effectiveCharsPerLine = PrinterBridge.epsonConfig.charactersPerLine;
+    // Calculate characters per line from explicit width parameter
+    final effectiveCharsPerLine = _getEpsonCharsPerLine(epsonWidth);
 
     // Helper functions that use the correct character width
     String horizontalLine() => '-' * effectiveCharsPerLine;
-
-    // Wrap long text to fit within the specified character width
-    List<String> wrapText(String text, int maxWidth) {
-      text = text.trim();
-      if (text.isEmpty) return [];
-
-      final List<String> lines = [];
-      final words = text.split(' ');
-      String currentLine = '';
-
-      for (String word in words) {
-        final testLine = currentLine.isEmpty ? word : '$currentLine $word';
-        if (testLine.length <= maxWidth) {
-          currentLine = testLine;
-        } else {
-          if (currentLine.isNotEmpty) {
-            lines.add(currentLine);
-            currentLine = word;
-          } else {
-            // Single word longer than maxWidth - just add it
-            lines.add(word);
-          }
-        }
-      }
-
-      if (currentLine.isNotEmpty) {
-        lines.add(currentLine);
-      }
-
-      return lines;
-    }
 
     String leftRight(String left, String right) {
       left = left.trim();
@@ -907,7 +990,7 @@ class PrinterBridge {
       final qtyStr = qty.length > (qtyWidth - 1)
           ? qty.substring(0, qtyWidth - 1)
           : qty;
-      final qtyField = (qtyStr + 'x').padRight(qtyWidth);
+      final qtyField = (qtyStr + ' x').padRight(qtyWidth);
 
       // Remaining width for name = total - qtyWidth - priceWidth
       final nameWidth = effectiveCharsPerLine - qtyWidth - priceWidth;
@@ -986,7 +1069,7 @@ class PrinterBridge {
         
         // Estimate printer width in dots for different paper sizes
         int estimatePrinterDots() {
-          final paperWidth = PrinterBridge.epsonConfig.paperWidth;
+          final paperWidth = epsonWidth ?? '80mm';
           switch (paperWidth) {
             case '58mm': return 384;   // 58mm
             case '60mm': return 424;   // 60mm  
@@ -1084,8 +1167,8 @@ class PrinterBridge {
     // Date Time (left) vs Cashier (right) - center the whole line using SDK
     final dateTime = '${receiptData.date.trim()} ${receiptData.time.trim()}';
     final cashierStr = receiptData.cashierName != null
-        ? 'Cashier: ${receiptData.cashierName!.trim()}'
-        : 'Cashier: N/A';
+        ? '${langCon.cashier}: ${receiptData.cashierName!.trim()}'
+        : '${langCon.cashier}: N/A';
     cmds.add(
       EpsonPrintCommand(
         type: EpsonCommandType.text,
@@ -1107,11 +1190,11 @@ class PrinterBridge {
 
     // Receipt # vs Lane - center the whole line using SDK
     final recLine = receiptData.receiptNumber != null
-        ? 'Receipt: ${receiptData.receiptNumber!.trim()}'
-        : 'Receipt: N/A';
+        ? '${langCon.receipt}: ${receiptData.receiptNumber!.trim()}'
+        : '${langCon.receipt}: N/A';
     final laneLine = receiptData.laneNumber != null
-        ? 'Lane: ${receiptData.laneNumber!.trim()}'
-        : 'Lane: N/A';
+        ? '${langCon.lane}: ${receiptData.laneNumber!.trim()}'
+        : '${langCon.lane}: N/A';
     cmds.add(
       EpsonPrintCommand(
         type: EpsonCommandType.text,
@@ -1193,11 +1276,23 @@ class PrinterBridge {
         EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
       );
       
-      // "Returns" header (left-aligned)
+      // "Returns" header - center using SDK for proper 58mm formatting
       cmds.add(
         EpsonPrintCommand(
           type: EpsonCommandType.text,
-          parameters: {'data': 'Returns\n'},
+          parameters: {'align': 'left'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'data': '${langCon.returns}\n'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'left'},
         ),
       );
       
@@ -1254,7 +1349,7 @@ class PrinterBridge {
     // Financial summary section (skip for gift receipts)
     if (!receiptData.isGiftReceipt && 
         (receiptData.subtotal != null || receiptData.discounts != null || 
-         receiptData.hst != null || receiptData.gst != null || receiptData.total != null)) {
+         (receiptData.taxes != null && receiptData.taxes!.isNotEmpty) || receiptData.total != null)) {
       
       cmds.add(
         EpsonPrintCommand(
@@ -1268,7 +1363,7 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Subtotal', '${receiptData.subtotal!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('${langCon.subTotal}', '${receiptData.subtotal!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
@@ -1277,34 +1372,30 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Discounts', '${receiptData.discounts!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('${langCon.discount}', '${receiptData.discounts!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
       
-      if (receiptData.hst != null && receiptData.hst! > 0) {
-        cmds.add(
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': leftRight('HST', '${receiptData.hst!.toStringAsFixed(2)}') + '\n'},
-          ),
-        );
-      }
-      
-      if (receiptData.gst != null && receiptData.gst! > 0) {
-        cmds.add(
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': leftRight('GST', '${receiptData.gst!.toStringAsFixed(2)}') + '\n'},
-          ),
-        );
+      // Add all taxes from the generic taxes map (supports any tax type)
+      if (receiptData.taxes != null) {
+        for (final taxEntry in receiptData.taxes!.entries) {
+          if (taxEntry.value > 0) {
+            cmds.add(
+              EpsonPrintCommand(
+                type: EpsonCommandType.text,
+                parameters: {'data': leftRight(taxEntry.key, '${taxEntry.value.toStringAsFixed(2)}') + '\n'},
+              ),
+            );
+          }
+        }
       }
       
       if (receiptData.total != null) {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': leftRight('Total', '${receiptData.total!.toStringAsFixed(2)}') + '\n'},
+            parameters: {'data': leftRight('${langCon.total}', '${receiptData.total!.toStringAsFixed(2)}') + '\n'},
           ),
         );
       }
@@ -1348,7 +1439,7 @@ class PrinterBridge {
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
-            parameters: {'data': 'Payment Method\n'},
+            parameters: {'data': '${langCon.paymentMethod}\n'},
           ),
         );
         cmds.add(
@@ -1358,7 +1449,13 @@ class PrinterBridge {
           ),
         );
         
-        // Add each payment method with left-right alignment
+        // Add each payment method with left-right alignment - center using SDK for proper 58mm formatting
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'center'},
+          ),
+        );
         receiptData.payments!.forEach((method, amount) {
           cmds.add(
             EpsonPrintCommand(
@@ -1367,9 +1464,17 @@ class PrinterBridge {
             ),
           );
         });
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'left'},
+          ),
+        );
       }
     }
-
+    cmds.add(
+      EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+    );
     // Footer message
     if (receiptData.thankYouMessage != null &&
         receiptData.thankYouMessage!.trim().isNotEmpty) {
@@ -1415,10 +1520,11 @@ class PrinterBridge {
     String brand,
     PrinterLabelData labelData, {
     Map<String, int>? dimensions,
+    String? epsonWidth,
   }) async {
     switch (brand.toLowerCase()) {
       case 'epson':
-        return await _printEpsonLabel(labelData);
+        return await _printEpsonLabel(labelData, epsonWidth);
       case 'star':
         return await _printStarLabel(labelData);
       case 'zebra':
@@ -1428,9 +1534,9 @@ class PrinterBridge {
     }
   }
 
-  static Future<bool> _printEpsonLabel(PrinterLabelData labelData) async {
+  static Future<bool> _printEpsonLabel(PrinterLabelData labelData, String? epsonWidth) async {
     try {
-      final commands = _buildEpsonLabelCommands(labelData);
+      final commands = _buildEpsonLabelCommands(labelData, epsonWidth);
       final printJob = EpsonPrintJob(commands: commands);
 
       // Print multiple labels based on quantity setting
@@ -1452,6 +1558,7 @@ class PrinterBridge {
 
   static List<EpsonPrintCommand> _buildEpsonLabelCommands(
     PrinterLabelData labelData,
+    String? epsonWidth,
   ) {
     final List<EpsonPrintCommand> commands = [];
 
@@ -1642,8 +1749,9 @@ class PrinterBridge {
             if (!receiptData.isGiftReceipt) ...{
               'subtotal': receiptData.subtotal?.toStringAsFixed(2),
               'discounts': receiptData.discounts?.toStringAsFixed(2), 
-              'hst': receiptData.hst?.toStringAsFixed(2),
-              'gst': receiptData.gst?.toStringAsFixed(2),
+              // Pass generic taxes map (supports any tax type from order_tax_breakdown)
+              'taxes': receiptData.taxes?.map((taxName, taxAmount) => 
+                MapEntry(taxName, taxAmount.toStringAsFixed(2))),
               'total': receiptData.total?.toStringAsFixed(2),
               'payments': receiptData.payments?.map((method, amount) => 
                 MapEntry(method, amount.toStringAsFixed(2))),
@@ -1766,10 +1874,10 @@ class PrinterBridge {
 
     // 7. RECEIPT NUMBER and LANE
     final receiptNumStr = receiptData.receiptNumber != null && receiptData.receiptNumber!.isNotEmpty
-        ? 'Receipt No: ${receiptData.receiptNumber}'
+        ? '${langCon.receiptNo}: ${receiptData.receiptNumber}'
         : '';
     final laneStr = receiptData.laneNumber != null && receiptData.laneNumber!.isNotEmpty
-        ? 'Lane: ${receiptData.laneNumber}'
+        ? '${langCon.lane}: ${receiptData.laneNumber}'
         : '';
     
     if (isNarrowPaper) {
@@ -1833,34 +1941,33 @@ class PrinterBridge {
     if (!receiptData.isGiftReceipt) {
       if (receiptData.subtotal != null) {
         cmds.add(StarPrintCommand.textLeftRight(
-          'Subtotal',
+          langCon.subTotal,
           receiptData.subtotal!.toStringAsFixed(2),
         ));
       }
       
       if (receiptData.discounts != null ) {
         cmds.add(StarPrintCommand.textLeftRight(
-          'Discounts',
-          '-${receiptData.discounts!.toStringAsFixed(2)}',
+          langCon.discount,
+          '${receiptData.discounts!.toStringAsFixed(2)}',
         ));
       }
       
-      if (receiptData.hst != null) {
-        cmds.add(StarPrintCommand.textLeftRight(
-          'HST',
-          receiptData.hst!.toStringAsFixed(2),
-        ));
+      // Add all taxes from the generic taxes map (supports any tax type)
+      if (receiptData.taxes != null) {
+        for (final taxEntry in receiptData.taxes!.entries) {
+          if (taxEntry.value > 0) {
+            cmds.add(StarPrintCommand.textLeftRight(
+              taxEntry.key,
+              taxEntry.value.toStringAsFixed(2),
+            ));
+          }
+        }
       }
       
-      if (receiptData.gst != null) {
-        cmds.add(StarPrintCommand.textLeftRight(
-          'GST',
-          receiptData.gst!.toStringAsFixed(2),
-        ));
-      }
       if (receiptData.total != null) {
         cmds.add(StarPrintCommand.textLeftRight(
-          'Total',
+          langCon.total,
           receiptData.total!.toStringAsFixed(2),
         ));
       }
@@ -1870,7 +1977,7 @@ class PrinterBridge {
       // 11. PAYMENT METHODS
       if (receiptData.payments != null && receiptData.payments!.isNotEmpty) {
         cmds.add(StarPrintCommand.text(
-          'Payment Method\n',
+          '${langCon.paymentMethod}\n',
           align: StarAlignment.center,
         ));
         
@@ -1884,13 +1991,17 @@ class PrinterBridge {
       }
     }
 
-    // 12. THANK YOU MESSAGE
+    // 12. THANK YOU MESSAGE (with text wrapping)
     if (receiptData.thankYouMessage != null && receiptData.thankYouMessage!.isNotEmpty) {
       cmds.add(StarPrintCommand.feed(1));
-      cmds.add(StarPrintCommand.text(
-        '${receiptData.thankYouMessage}\n',
-        align: StarAlignment.center,
-      ));
+      final charsPerLine = _getStarCharsPerLine(paperWidthMm);
+      final wrappedLines = wrapText(receiptData.thankYouMessage!, charsPerLine);
+      for (String line in wrappedLines) {
+        cmds.add(StarPrintCommand.text(
+          '$line\n',
+          align: StarAlignment.center,
+        ));
+      }
     }
 
     // 13. FEED AND CUT
@@ -1920,10 +2031,19 @@ class PrinterBridge {
       final scancode = labelData.barcode.isNotEmpty ? labelData.barcode : '0123456789';
       
       // Parse colorSize to extract size and color components
-      // colorSize format is typically "Small Turquoise" - split it properly
-      final colorSizeComponents = labelData.colorSize.isNotEmpty ? labelData.colorSize.split(' ') : ['Default'];
-      final size = colorSizeComponents.isNotEmpty ? colorSizeComponents[0] : '';
-      final color = colorSizeComponents.length > 1 ? colorSizeComponents.skip(1).join(' ') : (colorSizeComponents.isNotEmpty ? colorSizeComponents[0] : 'Default Color');
+      // colorSize format is typically "Small Turquoise" (size first, then color)
+      // If only one word, treat it as color (most variants are color-only like "red")
+      final colorSizeComponents = labelData.colorSize.isNotEmpty ? labelData.colorSize.split(' ') : [];
+      String size = '';
+      String color = '';
+      if (colorSizeComponents.length > 1) {
+        // Multiple words: first is size, rest is color
+        size = colorSizeComponents[0];
+        color = colorSizeComponents.skip(1).join(' ');
+      } else if (colorSizeComponents.length == 1) {
+        // Single word: treat as color only (e.g., "red", "blue")
+        color = colorSizeComponents[0];
+      }
       
       // Label layout settings following the same pattern as main.dart
       final labelSettings = {
@@ -2047,6 +2167,12 @@ class PrinterBridge {
       final receiptZpl = _generateZebraReceiptZPL(width, height, dpi, receiptData);
       await ZebraPrinter.sendCommands(receiptZpl, language: ZebraPrintLanguage.zpl);
 
+      // Reset label length back to default (600 dots) after printing
+      // This prevents subsequent prints from using the extended dynamic height
+      const resetHeightZpl = '^XA^LL1225^XZ';
+      await ZebraPrinter.sendCommands(resetHeightZpl, language: ZebraPrintLanguage.zpl);
+      debugPrint('PrinterBridge: Reset Zebra label length to 600 dots');
+
       return true;
     } catch (e) {
       debugPrint('Zebra receipt print failed: $e');
@@ -2106,7 +2232,7 @@ class PrinterBridge {
     // Build ZPL string dynamically using actual form data with calculated positions
     String receiptZpl =
         '''
-^XA
+^XA^CI28
 ^CF0,47
 ^FO$storeNameX,64
 ^FD${receiptData.storeName}^FS
@@ -2138,7 +2264,7 @@ class PrinterBridge {
     if (receiptData.cashierName != null &&
         receiptData.cashierName!.isNotEmpty) {
       // Position cashier name to avoid cutoff - use right-aligned positioning
-      String cashierText = "Cashier: ${receiptData.cashierName}";
+      String cashierText = "${langCon.cashier}: ${receiptData.cashierName}";
       int cashierCharWidth = getCharWidthInDots(30, dpi);
       int estimatedCashierWidth = cashierText.length * cashierCharWidth;
       int cashierX =
@@ -2160,7 +2286,7 @@ class PrinterBridge {
       receiptZpl += '''
 ^CF0,30
 ^FO470,526
-^FDLane: ${receiptData.laneNumber}^FS''';
+^FD${langCon.lane}: ${receiptData.laneNumber}^FS''';
     }
 
     // Add receipt number if provided
@@ -2169,7 +2295,7 @@ class PrinterBridge {
       receiptZpl += '''
 ^CF0,30
 ^FO20,530
-^FDReceipt No: ${receiptData.receiptNumber}^FS''';
+^FD${langCon.receiptNo}: ${receiptData.receiptNumber}^FS''';
     }
 
     // Add logo if provided (dynamic conversion from base64)
@@ -2249,7 +2375,7 @@ $logoZpl^FS''';
       receiptZpl += '''
 ^CF0,25
 ^FO20,$yPosition
-^FDReturns^FS''';
+^FD${langCon.returns}^FS''';
       yPosition += 56; // Move down for return items
       
       // Print return items with negative prefix (for regular receipts) or just name for gift receipts
@@ -2297,7 +2423,7 @@ $logoZpl^FS''';
     if (!receiptData.isGiftReceipt) {
       int currentY = totalY;
       if (receiptData.subtotal != null || receiptData.discounts != null || 
-          receiptData.hst != null || receiptData.gst != null || receiptData.total != null) {
+          (receiptData.taxes != null && receiptData.taxes!.isNotEmpty) || receiptData.total != null) {
         
         // Add each financial line with left-right alignment
         if (receiptData.subtotal != null) {
@@ -2310,7 +2436,7 @@ $logoZpl^FS''';
           receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
-^FDSubtotal^FS
+^FD${langCon.subTotal}^FS
 ^CF0,25
 ^FO$subtotalX,$currentY
 ^FD$subtotalText^FS''';
@@ -2327,45 +2453,33 @@ $logoZpl^FS''';
           receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
-^FDDiscounts^FS
+^FD${langCon.discount}^FS
 ^CF0,25
 ^FO$discountX,$currentY
 ^FD$discountText^FS''';
           currentY += 40;
         }
         
-        if (receiptData.hst != null && receiptData.hst! > 0) {
-          String hstText = "${receiptData.hst!.toStringAsFixed(2)}";
-          int hstCharWidth = getCharWidthInDots(25, dpi);
-          int estimatedHstWidth = hstText.length * hstCharWidth;
-          int hstX = (width - estimatedHstWidth - 20);
-          hstX = hstX.clamp(200, width - estimatedHstWidth);
-          
-          receiptZpl += '''
+        // Add all taxes from the generic taxes map (supports any tax type)
+        if (receiptData.taxes != null) {
+          for (final taxEntry in receiptData.taxes!.entries) {
+            if (taxEntry.value > 0) {
+              String taxText = "${taxEntry.value.toStringAsFixed(2)}";
+              int taxCharWidth = getCharWidthInDots(25, dpi);
+              int estimatedTaxWidth = taxText.length * taxCharWidth;
+              int taxX = (width - estimatedTaxWidth - 20);
+              taxX = taxX.clamp(200, width - estimatedTaxWidth);
+              
+              receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
-^FDHST^FS
+^FD${taxEntry.key}^FS
 ^CF0,25
-^FO$hstX,$currentY
-^FD$hstText^FS''';
-          currentY += 40;
-        }
-        
-        if (receiptData.gst != null && receiptData.gst! > 0) {
-          String gstText = "${receiptData.gst!.toStringAsFixed(2)}";
-          int gstCharWidth = getCharWidthInDots(25, dpi);
-          int estimatedGstWidth = gstText.length * gstCharWidth;
-          int gstX = (width - estimatedGstWidth - 20);
-          gstX = gstX.clamp(200, width - estimatedGstWidth);
-          
-          receiptZpl += '''
-^CF0,25
-^FO20,$currentY
-^FDGST^FS
-^CF0,25
-^FO$gstX,$currentY
-^FD$gstText^FS''';
-          currentY += 40;
+^FO$taxX,$currentY
+^FD$taxText^FS''';
+              currentY += 40;
+            }
+          }
         }
         
         if (receiptData.total != null) {
@@ -2378,7 +2492,7 @@ $logoZpl^FS''';
           receiptZpl += '''
 ^CF0,25
 ^FO20,$currentY
-^FDTotal^FS
+^FD${langCon.total}^FS
 ^CF0,25
 ^FO$totalX,$currentY
 ^FD$totalText^FS''';
@@ -2398,7 +2512,7 @@ $logoZpl^FS''';
           int paymentY = thirdLineY + 54;
           
           // Add centered "Payment Method" header
-          String paymentHeaderText = "Payment Method";
+          String paymentHeaderText = langCon.paymentMethod;
           int paymentHeaderCharWidth = getCharWidthInDots(25, dpi);
           int estimatedPaymentHeaderWidth = paymentHeaderText.length * paymentHeaderCharWidth;
           int paymentHeaderX = (width - estimatedPaymentHeaderWidth) ~/ 2;
@@ -2445,8 +2559,29 @@ $logoZpl^FS''';
       thankYouY = bottomLineY + 54;
     }
 
-    // Calculate minimum required height AFTER all dynamic content is added
-    int minRequiredHeight = thankYouY + 60; // Add bottom margin
+    // Add thank you message (centered, with text wrapping) at dynamic position
+    String thankYouMsg =
+        receiptData.thankYouMessage ?? 'Thank you for shopping with us!';
+    int thankYouCharWidth = getCharWidthInDots(30, dpi);
+    // Calculate max chars that fit in the width
+    int maxCharsPerLine = (width ~/ thankYouCharWidth).clamp(20, 60);
+    final wrappedThankYouLines = wrapText(thankYouMsg, maxCharsPerLine);
+    
+    int currentThankYouY = thankYouY;
+    for (String line in wrappedThankYouLines) {
+      int estimatedLineWidth = line.length * thankYouCharWidth;
+      int lineX = (width - estimatedLineWidth) ~/ 2;
+      lineX = lineX.clamp(0, width - estimatedLineWidth);
+      
+      receiptZpl += '''
+^CF0,30
+^FO$lineX,$currentThankYouY
+^FD$line^FS''';
+      currentThankYouY += 35; // Line height for font size 30
+    }
+
+    // Calculate minimum required height AFTER all dynamic content including wrapped footer
+    int minRequiredHeight = currentThankYouY + 60; // Add bottom margin
 
     // Use the larger of the detected height or minimum required height
     int actualReceiptHeight = height > minRequiredHeight
@@ -2454,22 +2589,8 @@ $logoZpl^FS''';
         : minRequiredHeight;
 
     debugPrint(
-      '[PrinterBridge] Receipt height - Final thank you Y: $thankYouY, Required: $minRequiredHeight, Using: $actualReceiptHeight',
+      '[PrinterBridge] Receipt height - Final thank you Y: $currentThankYouY, Required: $minRequiredHeight, Using: $actualReceiptHeight',
     );
-
-    // Add thank you message (centered) at dynamic position
-    String thankYouMsg =
-        receiptData.thankYouMessage ?? 'Thank you for shopping with us!';
-    int thankYouCharWidth = getCharWidthInDots(30, dpi);
-    int estimatedThankYouWidth = thankYouMsg.length * thankYouCharWidth;
-    int thankYouX = (width - estimatedThankYouWidth) ~/ 2;
-    thankYouX = thankYouX.clamp(0, width - estimatedThankYouWidth);
-
-    receiptZpl +=
-        '''
-^CF0,30
-^FO$thankYouX,$thankYouY
-^FD$thankYouMsg^FS''';
 
     // Set the label length to accommodate the full receipt if needed
     if (actualReceiptHeight > height) {
