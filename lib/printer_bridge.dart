@@ -1073,10 +1073,10 @@ class PrinterBridge {
     String? epsonWidth,
     String printLanguage = 'en',
   }) async {
-    // Receipt strings (langCon.*) are read via a plain non-reactive override
-    // for the duration of this call — NOT by mutating the ambient localization
-    // (an RxString), which would notify every Obx/GetX widget bound to it
-    // and flip the app's own displayed UI language while printing.
+    // Receipt strings (langCon.*) are scoped to this call only. The printer's
+    // configured language is frequently not the app's UI language, so this
+    // must not mutate any shared/observable locale state — doing so would flip
+    // the app's own displayed language for the duration of a print.
     return PrinterLocalizations.withPrintLanguage(printLanguage, () async {
       switch (brand.toLowerCase()) {
         case 'epson':
