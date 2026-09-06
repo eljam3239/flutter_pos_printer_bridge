@@ -348,89 +348,103 @@
     // Default port 9100 unless the identifier supplies one (not currently supported)
     NSInteger port = 9100;
 
-    @try {
-      TcpPrinterConnection *conn = [[TcpPrinterConnection alloc] initWithAddress:identifier andWithPort:port];
+    // Dispatch to background queue to avoid blocking the main thread during connection
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      @try {
+        TcpPrinterConnection *conn = [[TcpPrinterConnection alloc] initWithAddress:identifier andWithPort:port];
 
-      // If the caller supplied a timeout, use it for open
-      if (timeout && ![timeout isKindOfClass:[NSNull class]] && [timeout integerValue] > 0) {
-        // TcpPrinterConnection exposes setMaxTimeoutForOpen: (int)
-        [conn setMaxTimeoutForOpen:[timeout intValue]];
+        // If the caller supplied a timeout, use it for open
+        if (timeout && ![timeout isKindOfClass:[NSNull class]] && [timeout integerValue] > 0) {
+          // TcpPrinterConnection exposes setMaxTimeoutForOpen: (int)
+          [conn setMaxTimeoutForOpen:[timeout intValue]];
+        }
+
+        BOOL opened = [conn open];
+        
+        // Dispatch result back to main thread
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (!opened) {
+            NSLog(@"[ZebraPrinter] TCP open failed for %@:%ld", identifier, (long)port);
+            result([FlutterError errorWithCode:@"CONNECTION_FAILED" message:@"Failed to open TCP connection" details:nil]);
+            return;
+          }
+
+          // Save active connection
+          self.activeConnection = conn;
+          NSLog(@"[ZebraPrinter] Connected to %@:%ld successfully", identifier, (long)port);
+
+          // Return success (void)
+          result(nil);
+        });
+      } @catch (NSException *ex) {
+        NSLog(@"[ZebraPrinter] Exception while connecting: %@", ex);
+        dispatch_async(dispatch_get_main_queue(), ^{
+          result([FlutterError errorWithCode:@"CONNECTION_EXCEPTION" message:ex.reason details:nil]);
+        });
       }
-
-      BOOL opened = [conn open];
-      if (!opened) {
-        NSLog(@"[ZebraPrinter] TCP open failed for %@:%ld", identifier, (long)port);
-        result([FlutterError errorWithCode:@"CONNECTION_FAILED" message:@"Failed to open TCP connection" details:nil]);
-        return;
-      }
-
-      // Save active connection
-      self.activeConnection = conn;
-      NSLog(@"[ZebraPrinter] Connected to %@:%ld successfully", identifier, (long)port);
-
-      // Return success (void)
-      result(nil);
-      return;
-    } @catch (NSException *ex) {
-      NSLog(@"[ZebraPrinter] Exception while connecting: %@", ex);
-      result([FlutterError errorWithCode:@"CONNECTION_EXCEPTION" message:ex.reason details:nil]);
-      return;
-    }
+    });
   } else if ([[interfaceType lowercaseString] isEqualToString:@"bluetooth"]) {
     // Bluetooth Classic connection using MfiBtPrinterConnection
     // identifier should be the serial number of the accessory
     NSLog(@"[ZebraPrinter] Attempting Bluetooth connection to serial number: %@", identifier);
 
-    @try {
-      // Verify the accessory is still connected
-      EAAccessoryManager *accessoryManager = [EAAccessoryManager sharedAccessoryManager];
-      NSArray *connectedAccessories = [accessoryManager connectedAccessories];
-      
-      EAAccessory *targetAccessory = nil;
-      for (EAAccessory *accessory in connectedAccessories) {
-        if ([accessory.serialNumber isEqualToString:identifier] &&
-            [accessory.protocolStrings indexOfObject:@"com.zebra.rawport"] != NSNotFound) {
-          targetAccessory = accessory;
-          break;
-        }
+    // Check accessory on main thread first (EAAccessoryManager requires main thread)
+    EAAccessoryManager *accessoryManager = [EAAccessoryManager sharedAccessoryManager];
+    NSArray *connectedAccessories = [accessoryManager connectedAccessories];
+    
+    EAAccessory *targetAccessory = nil;
+    for (EAAccessory *accessory in connectedAccessories) {
+      if ([accessory.serialNumber isEqualToString:identifier] &&
+          [accessory.protocolStrings indexOfObject:@"com.zebra.rawport"] != NSNotFound) {
+        targetAccessory = accessory;
+        break;
       }
-      
-      if (!targetAccessory) {
-        NSLog(@"[ZebraPrinter] Bluetooth accessory not found or not connected: %@", identifier);
-        result([FlutterError errorWithCode:@"ACCESSORY_NOT_FOUND" 
-                                   message:@"Bluetooth accessory not found. Please ensure the printer is paired and connected in iOS Settings." 
-                                   details:nil]);
-        return;
-      }
-
-      // Create MfiBtPrinterConnection with the serial number
-      MfiBtPrinterConnection *conn = [[MfiBtPrinterConnection alloc] initWithSerialNumber:identifier];
-      
-      // Apply timeout if provided
-      if (timeout && ![timeout isKindOfClass:[NSNull class]] && [timeout integerValue] > 0) {
-        // Note: MfiBtPrinterConnection doesn't have setMaxTimeoutForOpen, but has read/write timeouts
-        // We can optionally set timeouts for read/write operations here if needed
-      }
-
-      BOOL opened = [conn open];
-      if (!opened) {
-        NSLog(@"[ZebraPrinter] Bluetooth open failed for %@", identifier);
-        result([FlutterError errorWithCode:@"CONNECTION_FAILED" message:@"Failed to open Bluetooth connection" details:nil]);
-        return;
-      }
-
-      // Save active connection
-      self.activeConnection = conn;
-      NSLog(@"[ZebraPrinter] Connected to Bluetooth printer %@ successfully", identifier);
-
-      // Return success (void)
-      result(nil);
-      return;
-    } @catch (NSException *ex) {
-      NSLog(@"[ZebraPrinter] Exception while connecting to Bluetooth: %@", ex);
-      result([FlutterError errorWithCode:@"CONNECTION_EXCEPTION" message:ex.reason details:nil]);
+    }
+    
+    if (!targetAccessory) {
+      NSLog(@"[ZebraPrinter] Bluetooth accessory not found or not connected: %@", identifier);
+      result([FlutterError errorWithCode:@"ACCESSORY_NOT_FOUND" 
+                                 message:@"Bluetooth accessory not found. Please ensure the printer is paired and connected in iOS Settings." 
+                                 details:nil]);
       return;
     }
+
+    // Dispatch to background queue to avoid blocking the main thread during connection
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      @try {
+        // Create MfiBtPrinterConnection with the serial number
+        MfiBtPrinterConnection *conn = [[MfiBtPrinterConnection alloc] initWithSerialNumber:identifier];
+        
+        // Apply timeout if provided
+        if (timeout && ![timeout isKindOfClass:[NSNull class]] && [timeout integerValue] > 0) {
+          // Note: MfiBtPrinterConnection doesn't have setMaxTimeoutForOpen, but has read/write timeouts
+          // We can optionally set timeouts for read/write operations here if needed
+        }
+
+        BOOL opened = [conn open];
+        
+        // Dispatch result back to main thread
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (!opened) {
+            NSLog(@"[ZebraPrinter] Bluetooth open failed for %@", identifier);
+            result([FlutterError errorWithCode:@"CONNECTION_FAILED" message:@"Failed to open Bluetooth connection" details:nil]);
+            return;
+          }
+
+          // Save active connection
+          self.activeConnection = conn;
+          NSLog(@"[ZebraPrinter] Connected to Bluetooth printer %@ successfully", identifier);
+
+          // Return success (void)
+          result(nil);
+        });
+      } @catch (NSException *ex) {
+        NSLog(@"[ZebraPrinter] Exception while connecting to Bluetooth: %@", ex);
+        dispatch_async(dispatch_get_main_queue(), ^{
+          result([FlutterError errorWithCode:@"CONNECTION_EXCEPTION" message:ex.reason details:nil]);
+        });
+      }
+    });
   } else {
     // Unsupported interface type at present
     result([FlutterError errorWithCode:@"UNSUPPORTED_INTERFACE" 

@@ -11,9 +11,11 @@ Pod::Spec.new do |s|
   s.dependency 'Flutter'
   s.platform = :ios, '15.0'
 
-  # Follow Zebra's official documentation exactly
-  # Use vendored_libraries for the static library file (libZSDK_API.a)
-  s.vendored_libraries = 'Frameworks/libZSDK_API.a'
+  # Use the xcframework so Xcode auto-selects the correct slice:
+  # ios-arm64 for device, ios-arm64_x86_64-simulator for the simulator.
+  # The flat libZSDK_API.a only contains device slices and fails to link
+  # against the iOS simulator on Apple Silicon.
+  s.vendored_frameworks = 'Frameworks/ZSDK_API.xcframework'
   
   # Set header search paths to the Headers directory
   s.xcconfig = { 
@@ -28,6 +30,14 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES', 
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
     'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/Frameworks/Headers" "$(SDKROOT)/usr/include/libxml2"',
-    'OTHER_LDFLAGS' => '-ObjC'
+    # -ObjC loads ObjC categories, -all_load ensures ALL symbols from static libraries are included
+    # This prevents release build link-time optimization from stripping SDK methods
+    'OTHER_LDFLAGS' => '-ObjC -all_load'
+  }
+  
+  # Ensure symbols aren't stripped in release builds
+  s.user_target_xcconfig = {
+    'DEAD_CODE_STRIPPING' => 'NO',
+    'STRIP_INSTALLED_PRODUCT' => 'NO'
   }
 end

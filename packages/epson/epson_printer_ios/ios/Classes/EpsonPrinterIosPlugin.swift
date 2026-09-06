@@ -564,17 +564,17 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         }
         
         DispatchQueue.global(qos: .userInitiated).async {
-          let success = self.epsonWrapper.print(withCommands: commands)
-          
-          DispatchQueue.main.async {
-            if success {
-              print("DEBUG: Print job sent successfully")
-              result(nil)
-            } else {
-              print("DEBUG: Print failed")
-              result(FlutterError(code: "PRINT_FAILED", 
-                                message: "Failed to print", 
-                                details: nil))
+          self.epsonWrapper.print(withCommands: commands) { success, code in
+            DispatchQueue.main.async {
+              if success {
+                print("DEBUG: Print job physically completed successfully (code=\(code))")
+                result(nil)
+              } else {
+                print("DEBUG: Print failed (code=\(code))")
+                result(FlutterError(code: "PRINT_FAILED", 
+                                  message: "Failed to print (code: \(code))", 
+                                  details: nil))
+              }
             }
           }
         }

@@ -36,6 +36,8 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   private var activity: Activity? = null
   private var printer: StarPrinter? = null
   private var discoveryManager: StarDeviceDiscoveryManager? = null
+  
+  private var configuredPrintableAreaMm: Double? = null
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "star_printer")
@@ -396,6 +398,23 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         
         if (commandsList != null && commandsList.isNotEmpty() && !isGraphicsOnly) {
           println("DEBUG: Using command-based printing with ${commandsList.size} commands")
+          
+          // Extract printableAreaMm from settings if provided
+          // This allows user's paper width configuration to affect column calculations
+          @Suppress("UNCHECKED_CAST")
+          val settings = args["settings"] as? Map<String, Any>
+          @Suppress("UNCHECKED_CAST")
+          val layout = settings?.get("layout") as? Map<String, Any>
+          @Suppress("UNCHECKED_CAST")
+          val details = layout?.get("details") as? Map<String, Any>
+          val printableAreaMm = (details?.get("printableAreaMm") as? Number)?.toDouble()
+          if (printableAreaMm != null && printableAreaMm > 0) {
+            configuredPrintableAreaMm = printableAreaMm
+            println("DEBUG: Command-based path - set configuredPrintableAreaMm to ${printableAreaMm}mm")
+          } else {
+            configuredPrintableAreaMm = null
+            println("DEBUG: Command-based path - no printableAreaMm provided, using model detection")
+          }
           
           val builder = StarXpandCommandBuilder()
           val printerBuilder = PrinterBuilder()
@@ -1672,6 +1691,21 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   // Estimate printable width in dots by model family (conservative defaults)
   private fun currentPrintableWidthDots(): Int {
+    // If configured printable area is set from Dart, calculate dots from mm
+    // BUT use the correct DPI for the printer model:
+    // - mC-Label2: 300 DPI (11.8 dots/mm)
+    // - Most other Star printers: 203 DPI (8 dots/mm)
+    configuredPrintableAreaMm?.let { configuredMm ->
+      if (configuredMm > 0) {
+        val ms = (printer?.information?.model?.toString() ?: "").lowercase()
+        val isMcLabel2 = ms.contains("mc_label2") || ms.contains("mc-label2") || ms.contains("label2")
+        val dotsPerMm = if (isMcLabel2) 11.8 else 8.0  // 300 DPI vs 203 DPI
+        val dotsFromConfig = (configuredMm * dotsPerMm).toInt()
+        println("DEBUG: Using configured printable area ${configuredMm}mm -> $dotsFromConfig dots (${if (isMcLabel2) "300" else "203"} DPI)")
+        return dotsFromConfig
+      }
+    }
+    
     return try {
       val ms = (printer?.information?.model?.toString() ?: "").lowercase()
       println("DEBUG: Printer model for width calculation: $ms")
@@ -1712,14 +1746,30 @@ class StarPrinterPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   }
 
   private fun currentColumnsPerLine(): Int {
-    val dots = currentPrintableWidthDots()
     val modelStr = printer?.information?.model?.toString()?.lowercase() ?: ""
+    
+    // mC-Label2 at 300 DPI
+    if (modelStr.contains("mc_label2") || modelStr.contains("mc-label2") || modelStr.contains("label2")) {
+      println("DEBUG: mC-Label2 detected, using 48 chars per line (300 DPI)")
+      return 48  // Match 80mm printers since mcLabel2 has similar dot width due to higher DPI
+    }
+    
+    // If configured printable area is set from Dart, use it to calculate chars per line
+    configuredPrintableAreaMm?.let { configuredMm ->
+      // At standard 12 dots/char: 48mm = ~32 chars, 72mm = ~48 chars
+      println("DEBUG: Using configured printable area ${configuredMm}mm for column calculation")
+      return when {
+        configuredMm <= 50 -> 32  // 58mm paper (48mm printable)
+        configuredMm <= 55 -> 36  // Slightly wider
+        else -> 48  // 80mm paper (72mm printable)
+      }
+    }
+    
+    val dots = currentPrintableWidthDots()
     
     return when {
       // TSP650II needs fewer characters per line than other 80mm printers
       modelStr.contains("tsp650") -> 42
-      // mcLabel2 at 300 DPI with 566 dots can fit more characters (~47 chars)
-      modelStr.contains("mc_label2") || modelStr.contains("mc-label2") || modelStr.contains("label2") -> 48
       // Other 80mm printers
       dots >= 576 -> 48
       // 58mm printers  

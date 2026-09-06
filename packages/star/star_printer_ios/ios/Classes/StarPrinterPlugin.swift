@@ -6,9 +6,23 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     private var printer: StarPrinter?
     private var connectionSettings: StarConnectionSettings?
     private var discoveredPrinters: [StarPrinter] = []
+
+    private var configuredPrintableAreaMm: Double? = nil
     
     // Determine printable pixel width for current printer (rough mapping by model)
     private func currentPrintableWidthDots() -> Int {
+        
+        // - mC-Label2: 300 DPI (11.8 dots/mm)
+        // - Most other Star printers: 203 DPI (8 dots/mm)
+        if let configuredMm = configuredPrintableAreaMm, configuredMm > 0 {
+            let name = self.printer?.information?.model.description.lowercased() ?? ""
+            let isMcLabel2 = name.contains("mc_label2") || name.contains("mc-label2") || name.contains("label2")
+            let dotsPerMm = isMcLabel2 ? 11.8 : 8.0  // 300 DPI vs 203 DPI
+            let dotsFromConfig = Int(configuredMm * dotsPerMm)
+            print("DEBUG: Using configured printable area \(configuredMm)mm -> \(dotsFromConfig) dots (\(isMcLabel2 ? "300" : "203") DPI)")
+            return dotsFromConfig
+        }
+        
         guard let model = self.printer?.information?.model else { return 576 }
         let name = String(describing: model).lowercased()
         print("DEBUG: Printer model for width calculation: \(name)")
@@ -48,13 +62,23 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
     // Estimate characters per line for TextParameter widths
     private func currentColumnsPerLine() -> Int {
         let modelStr = self.printer?.information?.model.description.lowercased() ?? ""
+        if modelStr.contains("mc_label2") || modelStr.contains("mc-label2") || modelStr.contains("label2") {
+            print("DEBUG: mC-Label2 detected, using 48 chars per line (300 DPI)")
+            return 48  // Match 80mm printers since mcLabel2 has similar dot width due to higher DPI
+        }
+        
+        if let configuredMm = configuredPrintableAreaMm {
+            // At standard 12 dots/char: 48mm = ~32 chars, 72mm = ~48 chars
+            // Using conservative 1.5mm per character
+            let calculatedChars = Int(configuredMm / 1.5)
+            print("DEBUG: Using configured printable area \(configuredMm)mm -> \(calculatedChars) chars per line")
+            if configuredMm <= 50 { return 32 }  // 58mm paper (48mm printable)
+            if configuredMm <= 55 { return 36 }  // Slightly wider
+            return 48  // 80mm paper (72mm printable)
+        }
+        
         if modelStr.contains("tsp650") {
             return 42  // TSP650II doesn't support .setWidth() so use conservative char count
-        }
-        // mcLabel2 at 300 DPI with 566 dots can fit more characters
-        // At ~12 dots/char (standard font), 566/12 = ~47 chars
-        if modelStr.contains("mc_label2") || modelStr.contains("mc-label2") {
-            return 48  // Match 80mm printers since mcLabel2 has similar dot width
         }
         let dots = currentPrintableWidthDots()
         if dots >= 560 { return 48 }
@@ -69,9 +93,9 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         guard let model = self.printer?.information?.model else { return false }
         let name = String(describing: model).lowercased()
         let isLabel = name.contains("mc_label2") || name.contains("mc-label2") || 
-               name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk") ||
-               name.contains("mpop")  // mPOP can also print labels
+               name.contains("tsp100iv_sk") || name.contains("tsp100iv-sk") || name.contains("sk")
         // DO NOT include regular tsp100iv - it's a receipt printer!
+        // DO NOT include mPOP - it's primarily a receipt printer with cash drawer
         print("DEBUG: isLabelPrinter check for '\(name)': \(isLabel)")
         return isLabel
     }
@@ -521,6 +545,19 @@ public class StarPrinterPlugin: NSObject, FlutterPlugin {
         // Skip command-based for graphics-only printers - they need the legacy createDetailsImage approach
         if let commands = args["commands"] as? [[String: Any]], !commands.isEmpty, !isGraphicsOnly {
             print("DEBUG: Using command-based printing with \(commands.count) commands")
+            
+            // Extract printableAreaMm from settings if provided
+            // This allows user's paper width configuration to affect column calculations
+            let settings = args["settings"] as? [String: Any]
+            let layout = settings?["layout"] as? [String: Any]
+            let details = layout?["details"] as? [String: Any]
+            if let printableAreaMm = details?["printableAreaMm"] as? Double, printableAreaMm > 0 {
+                self.configuredPrintableAreaMm = printableAreaMm
+                print("DEBUG: Command-based path - set configuredPrintableAreaMm to \(printableAreaMm)mm")
+            } else {
+                self.configuredPrintableAreaMm = nil
+                print("DEBUG: Command-based path - no printableAreaMm provided, using model detection")
+            }
             
             Task {
                 do {

@@ -321,6 +321,65 @@
         return NO;
     }
     
+    [self buildCommandBuffer:commands];
+    
+    NSLog(@"Sending print data to printer...");
+    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"Print result: %d (EPOS2_SUCCESS=0)", result);
+    // Important: Clear buffer after send to prevent subsequent operations (e.g., drawer pulse)
+    // from re-sending the previous print content.
+    [self.printer clearCommandBuffer];
+    if (result == EPOS2_SUCCESS) {
+        NSLog(@"Print job sent successfully");
+        return YES;
+    } else {
+        NSLog(@"Print failed with result=%d", result);
+        return NO;
+    }
+}
+
+- (void)printWithCommands:(NSArray<NSDictionary *> *)commands completion:(void (^)(BOOL success, int32_t code))completion {
+    NSLog(@"Starting async print with %lu commands (waiting for physical completion)", (unsigned long)commands.count);
+    
+    if (!self.printer) {
+        NSLog(@"ERROR: No printer connected");
+        if (completion) { completion(NO, -1); }
+        return;
+    }
+    
+    // Store the completion handler — onPtrReceive will invoke it
+    self.printCompletionHandler = completion;
+    
+    [self buildCommandBuffer:commands];
+    
+    NSLog(@"Sending print data to printer (async, waiting for onPtrReceive)...");
+    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"sendData result: %d (EPOS2_SUCCESS=0)", result);
+    [self.printer clearCommandBuffer];
+    
+    if (result != EPOS2_SUCCESS) {
+        NSLog(@"sendData failed with result=%d, completing immediately", result);
+        self.printCompletionHandler = nil;
+        if (completion) { completion(NO, result); }
+        return;
+    }
+    
+    NSLog(@"Print data sent, waiting for physical print completion via onPtrReceive...");
+    
+    // Safety timeout: if onPtrReceive never fires (e.g., connection drop), complete after 30s
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf && strongSelf.printCompletionHandler) {
+            NSLog(@"WARNING: onPtrReceive timeout (30s). Completing print as success (data was sent).");
+            void (^handler)(BOOL, int32_t) = strongSelf.printCompletionHandler;
+            strongSelf.printCompletionHandler = nil;
+            handler(YES, EPOS2_SUCCESS);
+        }
+    });
+}
+
+- (void)buildCommandBuffer:(NSArray<NSDictionary *> *)commands {
     NSLog(@"Clearing command buffer...");
     [self.printer clearCommandBuffer];
     
@@ -565,20 +624,6 @@
             NSLog(@"WARNING: Unknown command type: %@", type);
         }
     }
-    
-    NSLog(@"Sending print data to printer...");
-    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
-    NSLog(@"Print result: %d (EPOS2_SUCCESS=0)", result);
-    // Important: Clear buffer after send to prevent subsequent operations (e.g., drawer pulse)
-    // from re-sending the previous print content.
-    [self.printer clearCommandBuffer];
-    if (result == EPOS2_SUCCESS) {
-        NSLog(@"Print job sent successfully");
-        return YES;
-    } else {
-        NSLog(@"Print failed with result=%d", result);
-        return NO;
-    }
 }
 
 // MARK: - Bluetooth Discovery (Classic only; BLE disabled)
@@ -795,7 +840,15 @@
 #pragma mark - Epos2PtrReceiveDelegate
 
 - (void)onPtrReceive:(Epos2Printer *)printerObj code:(int32_t)code status:(Epos2PrinterStatusInfo *)status printJobId:(NSString *)printJobId {
-    NSLog(@"Print job completed with code: %d", code);
+    NSLog(@"Print job physically completed with code: %d (EPOS2_CODE_SUCCESS=0)", code);
+    
+    if (self.printCompletionHandler) {
+        BOOL success = (code == EPOS2_CODE_SUCCESS);
+        void (^handler)(BOOL, int32_t) = self.printCompletionHandler;
+        self.printCompletionHandler = nil;
+        NSLog(@"Invoking print completion handler: success=%d, code=%d", success, code);
+        handler(success, code);
+    }
 }
 
 #pragma mark - Paper Width Detection

@@ -34,6 +34,8 @@ android {
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 34
+        // ProGuard rules for consumers of this library
+        consumerProguardFiles 'consumer-rules.pro'
     }
 
     // Required for Zebra SDK as per documentation
@@ -47,13 +49,19 @@ android {
 }
 
 dependencies {
-    implementation 'io.flutter:flutter_embedding_debug:1.0.0-1a65d409c7a1438a34d21b60bf30a6fd5db59314'
+    //implementation 'io.flutter:flutter_embedding_debug:1.0.0-1a65d409c7a1438a34d21b60bf30a6fd5db59314'
+
+    // Add Apache Commons Lang3 (Zebra SDK Uses This)
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
     
     // Jackson JSON library required by Zebra SDK
     implementation 'com.fasterxml.jackson.core:jackson-core:2.15.2'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.15.2'
     
-    // Include all JAR files from libs directory
+    // Apache Commons Lang3 (Zebra SDK dependency)
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    
+    // Include all JAR files from libs directory (Zebra SDK)
     implementation fileTree(dir: 'libs', include: ['*.jar'])
 }

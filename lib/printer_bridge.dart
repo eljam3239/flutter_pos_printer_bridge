@@ -7,7 +7,7 @@ import 'package:epson_printer/epson_printer.dart';
 import 'package:star_printer/star_printer.dart' as star;
 import 'package:zebra_printer/zebra_printer.dart';
 
-import '../../../utils/global_keys.dart';
+import 'printer_localizations.dart';
 import 'star_commands.dart';
 
 /// Epson printer configuration
@@ -169,6 +169,154 @@ class PrinterReturnLineItem {
   double get totalPrice => -(quantity * unitPrice);
 }
 
+/// Terminal payment metadata (card / EMV details returned by the payment
+/// terminal). When present on a [PrinterPayment], receipt builders render the
+/// card detail block instead of the simple method→amount line. Mirrors the
+/// `metadata` object read by the web cloudprint `getPaymentMarkup` function.
+class PrinterPaymentMetadata {
+  final String? cardBrand;
+  final String? cardMask4;
+  final String? cardEntry;
+  final String? transactionAmount;
+  final String? approvalMessage;
+  final String? paymentDate;
+  final String? paymentTime;
+  final String? authCode;
+  final String? paymentId;
+  // Currency of the terminal transaction amount (defaults CAD / $).
+  final String paymentCurrencyCode;
+  final String paymentCurrencySymbol;
+  // EMV / account details rendered in the transaction record block.
+  final String? accountType;
+  final String? cardAid; // AID
+  final String? tagAac; // TC (sale) / AAC (refund)
+  final String? tagTvr; // TVR
+  final String? tagTsi; // TSI
+  // Acquirer / settlement identifiers. Every field is optional: acquirers
+  // differ in which of these they return, and each is printed only when
+  // non-empty, so an acquirer that omits one simply prints one line fewer.
+  final String? merchantId;
+  final String? terminalId;
+  final String? rrn; // retrieval reference number
+  final String? batchDisplay; // settlement batch, e.g. "232-001"
+  final String? cvm; // e.g. "NO CVM" — drives the "No Signature Required" line
+  // Typically populated for debit/EBT transactions only.
+  final String? traceNumber;
+  final String? availableBalance; // formatted major-unit amount, e.g. "12.34"
+
+  // --- Display rules -------------------------------------------------------
+  // Acquirers publish differing lists of fields their receipts are required to
+  // carry, and some mandate a layout that conflicts with the default. These
+  // flags let a caller express those rules without the bridge having to know
+  // which acquirer it is talking to.
+
+  /// Whether to print the EMV tag block (TC/AAC, TVR, TSI).
+  ///
+  /// Defaults to true. Set false for acquirers whose required-fields list
+  /// omits them and whose certification disallows printing extras.
+  final bool showEmvTags;
+
+  /// Whether the amount is printed as an Amount/Subtotal/Total breakdown
+  /// rather than a single Total line.
+  ///
+  /// All three lines render [transactionAmount]; some acquirers require the
+  /// breakdown even when no tip or surcharge splits the total.
+  final bool showAmountBreakdown;
+
+  PrinterPaymentMetadata({
+    this.cardBrand,
+    this.cardMask4,
+    this.cardEntry,
+    this.transactionAmount,
+    this.approvalMessage,
+    this.paymentDate,
+    this.paymentTime,
+    this.authCode,
+    this.paymentId,
+    this.paymentCurrencyCode = 'CAD',
+    this.paymentCurrencySymbol = '\$',
+    this.accountType,
+    this.cardAid,
+    this.tagAac,
+    this.tagTvr,
+    this.tagTsi,
+    this.merchantId,
+    this.terminalId,
+    this.rrn,
+    this.batchDisplay,
+    this.cvm,
+    this.traceNumber,
+    this.availableBalance,
+    this.showEmvTags = true,
+    this.showAmountBreakdown = false,
+  });
+
+  /// Builds metadata from a flat terminal-response map.
+  ///
+  /// Keys are snake_case and all optional. Adapt an acquirer's own response
+  /// shape into this map at the integration boundary rather than teaching the
+  /// bridge about individual acquirers.
+  factory PrinterPaymentMetadata.fromMap(Map<String, dynamic> map) {
+    final currency = map['payment_currency'];
+    final currencyMap = currency is Map ? currency : const {};
+
+    // Balances arrive as minor units (cents). A zero balance is suppressed
+    // rather than printed as "$0.00", matching what terminals print
+    // themselves — the line is only meaningful when there is a balance left.
+    String? formatMinorUnits(dynamic value) {
+      final minorUnits = int.tryParse(value?.toString() ?? '');
+      if (minorUnits == null || minorUnits == 0) return null;
+      return (minorUnits / 100).toStringAsFixed(2);
+    }
+
+    return PrinterPaymentMetadata(
+      cardBrand: map['card_brand']?.toString(),
+      cardMask4: map['card_mask4']?.toString(),
+      cardEntry: map['card_entry']?.toString(),
+      transactionAmount: map['transaction_amount']?.toString(),
+      approvalMessage: map['approval_message']?.toString(),
+      paymentDate: map['payment_date']?.toString(),
+      paymentTime: map['payment_time']?.toString(),
+      authCode: map['auth_code']?.toString(),
+      paymentId: map['payment_id']?.toString(),
+      paymentCurrencyCode: currencyMap['code']?.toString() ?? 'CAD',
+      paymentCurrencySymbol: currencyMap['symbol']?.toString() ?? '\$',
+      accountType: map['account_type']?.toString(),
+      cardAid: map['card_aid']?.toString(),
+      tagAac: map['tag_aac']?.toString(),
+      tagTvr: map['tag_tvr']?.toString(),
+      tagTsi: map['tag_tsi']?.toString(),
+      merchantId: map['merchant_id']?.toString(),
+      terminalId: map['terminal_id']?.toString(),
+      rrn: map['rrn']?.toString(),
+      batchDisplay: map['batch_display']?.toString(),
+      cvm: map['cvm']?.toString(),
+      traceNumber: map['trace_number']?.toString(),
+      availableBalance: formatMinorUnits(map['available_balance_minor']),
+      showEmvTags: map['show_emv_tags'] as bool? ?? true,
+      showAmountBreakdown: map['show_amount_breakdown'] as bool? ?? false,
+    );
+  }
+}
+
+/// A single payment line on a receipt. [method] is the localized display name,
+/// [amount] is signed (negative for refunds/returns). When [metadata] is set,
+/// the payment went through a card terminal and builders render its card block.
+class PrinterPayment {
+  final String method;
+  final num amount;
+  final PrinterPaymentMetadata? metadata;
+
+  PrinterPayment({
+    required this.method,
+    required this.amount,
+    this.metadata,
+  });
+
+  /// Whether this payment is a refund/return (signed [amount] is negative).
+  bool get isRefund => amount < 0;
+}
+
 /// Universal receipt data class for all printer brands
 class PrinterReceiptData {
   final String storeName;
@@ -181,6 +329,7 @@ class PrinterReceiptData {
   final String? laneNumber;
   final List<PrinterLineItem> items;
   final List<PrinterReturnLineItem>? returnItems;
+  final List<PrinterLineItem>? exchangeItems;
   final String? thankYouMessage;
   final String? logoBase64;
   final DateTime? transactionDate;
@@ -193,8 +342,8 @@ class PrinterReceiptData {
   /// Supports any tax type from order_tax_breakdown
   final Map<String, double>? taxes;
   final double? total;
-  // Payment methods breakdown
-  final Map<String, num>? payments;
+  // Payment methods breakdown. Each entry may carry terminal [PrinterPaymentMetadata].
+  final List<PrinterPayment>? payments;
 
   PrinterReceiptData({
     required this.storeName,
@@ -207,6 +356,7 @@ class PrinterReceiptData {
     this.laneNumber,
     required this.items,
     this.returnItems,
+    this.exchangeItems,
     this.thankYouMessage,
     this.logoBase64,
     this.transactionDate,
@@ -225,6 +375,43 @@ class PrinterReceiptData {
   double get calculatedTotal {
     return items.fold(0.0, (sum, item) => sum + item.totalPrice);
   }
+
+  /// Exchange/trade-in total shown as a negative summary line.
+  double get exchangeTotal {
+    return exchangeItems?.fold<double>(0.0, (sum, item) => sum + item.totalPrice.abs()) ?? 0.0;
+  }
+}
+
+/// Data needed to print a standalone card-terminal transaction slip (no line
+/// items/totals — just a store header, the transaction record block, and a
+/// CLIENT COPY/MERCHANT COPY line). Independent of [PrinterReceiptData]; used
+/// by [PrinterBridge.printTerminalReceipt] for the terminal charge/refund/void
+/// flow (`terminal_charge_dialog.dart`), which has no order/items to attach to.
+class PrinterTerminalReceiptData {
+  final String storeName;
+  final String storeAddress;
+  final String? logoBase64;
+  final PrinterPaymentMetadata metadata;
+
+  /// SALE / REFUND / VOID / CANCEL
+  final String saleContext;
+
+  /// CLIENT / MERCHANT
+  final String receiptFor;
+
+  /// Whether the terminal declined this transaction. When true (or when
+  /// saleContext is REFUND, the slip shows AAC instead of TC.
+  final bool isDeclined;
+
+  PrinterTerminalReceiptData({
+    required this.storeName,
+    required this.storeAddress,
+    this.logoBase64,
+    required this.metadata,
+    required this.saleContext,
+    required this.receiptFor,
+    this.isDeclined = false,
+  });
 }
 
 /// Universal label data class for all printer brands
@@ -884,18 +1071,68 @@ class PrinterBridge {
     PrinterReceiptData receiptData, {
     Map<String, int>? dimensions,
     String? epsonWidth,
+    String printLanguage = 'en',
   }) async {
-    switch (brand.toLowerCase()) {
-      case 'epson':
-        return _printEpsonReceipt(receiptData, epsonWidth);
-      case 'star':
-        return _printStarReceipt(receiptData);
-      case 'zebra':
-        return _printZebraReceipt(receiptData, dimensions);
+    // Receipt strings (langCon.*) are read via a plain non-reactive override
+    // for the duration of this call — NOT by mutating the ambient localization
+    // (an RxString), which would notify every Obx/GetX widget bound to it
+    // and flip the app's own displayed UI language while printing.
+    return PrinterLocalizations.withPrintLanguage(printLanguage, () async {
+      switch (brand.toLowerCase()) {
+        case 'epson':
+          return await _printEpsonReceipt(receiptData, epsonWidth);
+        case 'star':
+          return await _printStarReceipt(receiptData);
+        case 'zebra':
+          return await _printZebraReceipt(receiptData, dimensions);
+        default:
+          throw ArgumentError('Unsupported brand: $brand');
+      }
+    });
+  }
+
+  /// Print a standalone card-terminal transaction slip (see
+  /// [PrinterTerminalReceiptData]). Returns true if print successful.
+  static Future<bool> printTerminalReceipt(
+    String brand,
+    PrinterTerminalReceiptData data, {
+    Map<String, int>? dimensions,
+    String? epsonWidth,
+    String printLanguage = 'en',
+  }) async {
+    return PrinterLocalizations.withPrintLanguage(printLanguage, () async {
+      switch (brand.toLowerCase()) {
+        case 'epson':
+          return await _printEpsonTerminalReceipt(data, epsonWidth);
+        case 'star':
+          return await _printStarTerminalReceipt(data);
+        case 'zebra':
+          return await _printZebraTerminalReceipt(data, dimensions);
+        default:
+          throw ArgumentError('Unsupported brand: $brand');
+      }
+    });
+  }
+
+  /// Localized SALE/REFUND/VOID/CANCEL label printed on a terminal slip.
+  static String _terminalTransactionLabel(String saleContext) {
+    switch (saleContext) {
+      case 'REFUND':
+        return langCon.refundLabel;
+      case 'VOID_SALE':
+        return langCon.voidSaleLabel;
+      case 'VOID_REFUND':
+        return langCon.voidRefundLabel;
+      case 'CANCEL':
+        return langCon.cancelLabel;
+      case 'SALE':
       default:
-        throw ArgumentError('Unsupported brand: $brand');
+        return langCon.saleLabel;
     }
   }
+
+  static bool _isVoidContext(String saleContext) =>
+      saleContext == 'VOID_SALE' || saleContext == 'VOID_REFUND';
 
   /// Open cash drawer for the specified brand
   /// Returns true if successful
@@ -990,7 +1227,7 @@ class PrinterBridge {
       final qtyStr = qty.length > (qtyWidth - 1)
           ? qty.substring(0, qtyWidth - 1)
           : qty;
-      final qtyField = (qtyStr + ' x').padRight(qtyWidth);
+      final qtyField = (qtyStr + ' x ').padRight(qtyWidth);
 
       // Remaining width for name = total - qtyWidth - priceWidth
       final nameWidth = effectiveCharsPerLine - qtyWidth - priceWidth;
@@ -1280,13 +1517,13 @@ class PrinterBridge {
       cmds.add(
         EpsonPrintCommand(
           type: EpsonCommandType.text,
-          parameters: {'align': 'left'},
+          parameters: {'align': 'center'},
         ),
       );
       cmds.add(
         EpsonPrintCommand(
           type: EpsonCommandType.text,
-          parameters: {'data': '${langCon.returns}\n'},
+          parameters: {'data': leftRight('${langCon.returns}', '') + '\n'},
         ),
       );
       cmds.add(
@@ -1313,6 +1550,63 @@ class PrinterBridge {
                   : leftRight(
                       '${returnItem.quantity} x ${returnItem.itemName}',
                       '-${returnItem.unitPrice.toStringAsFixed(2)}',
+                    ) + '\n',
+            },
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': 'left'},
+          ),
+        );
+      }
+    }
+
+    // Exchange/Trade-in items section
+    if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+      // Add whitespace
+      cmds.add(
+        EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+      );
+      
+      // "Trade-ins/Exchanges" header
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'center'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'data': leftRight('${langCon.tradeInsExchanges}', '') + '\n'},
+        ),
+      );
+      cmds.add(
+        EpsonPrintCommand(
+          type: EpsonCommandType.text,
+          parameters: {'align': 'left'},
+        ),
+      );
+      
+      for (final exchangeItem in receiptData.exchangeItems!) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': receiptData.isGiftReceipt ? 'left' : 'center'},
+          ),
+        );
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {
+              'data': receiptData.isGiftReceipt
+                  ? qtyName(exchangeItem.quantity.toString(), exchangeItem.itemName) + '\n'
+                  : qtyNamePrice(
+                      exchangeItem.quantity.toString(),
+                      exchangeItem.itemName,
+                      '-${exchangeItem.totalPrice.toStringAsFixed(2)}',
                     ) + '\n',
             },
           ),
@@ -1391,6 +1685,16 @@ class PrinterBridge {
         }
       }
       
+      // Trade-ins/Exchanges summary line
+      if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+        cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': leftRight('${langCon.tradeInsExchanges}', '-${receiptData.exchangeTotal.toStringAsFixed(2)}') + '\n'},
+          ),
+        );
+      }
+      
       if (receiptData.total != null) {
         cmds.add(
           EpsonPrintCommand(
@@ -1449,21 +1753,80 @@ class PrinterBridge {
           ),
         );
         
-        // Add each payment method with left-right alignment - center using SDK for proper 58mm formatting
-        cmds.add(
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'align': 'center'},
-          ),
-        );
-        receiptData.payments!.forEach((method, amount) {
-          cmds.add(
-            EpsonPrintCommand(
-              type: EpsonCommandType.text,
-              parameters: {'data': leftRight(method, '${amount.toStringAsFixed(2)}') + '\n'},
-            ),
-          );
-        });
+        void addLine(String data) => cmds.add(
+              EpsonPrintCommand(
+                type: EpsonCommandType.text,
+                parameters: {'data': data + '\n'},
+              ),
+            );
+        void setAlign(String a) => cmds.add(
+              EpsonPrintCommand(
+                type: EpsonCommandType.text,
+                parameters: {'align': a},
+              ),
+            );
+        void setBold(bool b) => cmds.add(
+              EpsonPrintCommand(
+                type: EpsonCommandType.textStyle,
+                parameters: {
+                  'reverse': 'false',
+                  'underline': 'false',
+                  'bold': b ? 'true' : 'false',
+                  'color': '1',
+                },
+              ),
+            );
+        for (final payment in receiptData.payments!) {
+          final meta = payment.metadata;
+          if (meta != null) {
+            // Terminal payment: render the full transaction record block
+            // (mirrors web getPaymentMarkup). Refunds branch on payment.isRefund.
+            final isRefund = payment.isRefund;
+            // Summary line: localized method -> signed amount
+            setAlign('left');
+            addLine(leftRight(payment.method, payment.amount.toStringAsFixed(2)));
+            // Transaction Record header (centered, bold)
+            setBold(true);
+            setAlign('center');
+            addLine(langCon.transactionRecord);
+            setBold(false);
+            setAlign('left');
+            // Card details
+            addLine(leftRight(meta.cardBrand ?? '', meta.cardEntry ?? ''));
+            addLine(leftRight(langCon.card, meta.cardMask4 ?? ''));
+            addLine(leftRight(langCon.authCode, meta.authCode ?? ''));
+            addLine(leftRight(langCon.ref, meta.paymentId ?? ''));
+            addLine(leftRight(meta.paymentDate ?? '', meta.paymentTime ?? ''));
+            // SALE / REFUND + terminal total (bold)
+            setBold(true);
+            setAlign('center');
+            addLine(isRefund ? langCon.refundLabel : langCon.saleLabel);
+            setAlign('left');
+            addLine(leftRight(
+                langCon.total,
+                '${meta.paymentCurrencyCode} '
+                    '${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}'));
+            setAlign('center');
+            addLine(meta.approvalMessage ?? '');
+            setBold(false);
+            // Account type + EMV tags
+            addLine(meta.accountType ?? '');
+            setAlign('left');
+            addLine(leftRight(langCon.aid, meta.cardAid ?? ''));
+            // Omitted when the acquirer's required-fields list excludes them.
+            if (meta.showEmvTags) {
+              addLine(leftRight(
+                  isRefund ? langCon.aac : langCon.tc, meta.tagAac ?? ''));
+              addLine(leftRight(langCon.tvr, meta.tagTvr ?? ''));
+              addLine(leftRight(langCon.tsi, meta.tagTsi ?? ''));
+            }
+            addLine(horizontalLine());
+          } else {
+            // Simple line: signed amount (negative for refunds/returns)
+            setAlign('left');
+            addLine(leftRight(payment.method, payment.amount.toStringAsFixed(2)));
+          }
+        }
         cmds.add(
           EpsonPrintCommand(
             type: EpsonCommandType.text,
@@ -1506,6 +1869,223 @@ class PrinterBridge {
     }
 
     // End feeds + cut
+    cmds.add(
+      EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
+    );
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+    return cmds;
+  }
+
+  static Future<bool> _printEpsonTerminalReceipt(
+    PrinterTerminalReceiptData data,
+    String? epsonWidth,
+  ) async {
+    try {
+      final commands = _buildEpsonTerminalCommands(data, epsonWidth);
+      if (commands.isEmpty) {
+        debugPrint('Epson terminal receipt has no content');
+        return false;
+      }
+      final printJob = EpsonPrintJob(commands: commands);
+      await EpsonPrinter.printReceipt(printJob);
+      return true;
+    } catch (e) {
+      debugPrint('Epson terminal receipt print failed: $e');
+      return false;
+    }
+  }
+
+  /// Build Epson commands for a standalone terminal (card transaction) slip.
+  /// Deliberately independent of [_buildEpsonReceiptCommands] — mirrors its
+  /// header/transaction-record rendering but produces a minimal slip with no
+  /// items/totals, plus a CLIENT COPY/MERCHANT COPY line.
+  static List<EpsonPrintCommand> _buildEpsonTerminalCommands(
+    PrinterTerminalReceiptData data,
+    String? epsonWidth,
+  ) {
+    final List<EpsonPrintCommand> cmds = [];
+    final effectiveCharsPerLine = _getEpsonCharsPerLine(epsonWidth);
+
+    String horizontalLine() => '-' * effectiveCharsPerLine;
+
+    String leftRight(String left, String right) {
+      left = left.trim();
+      right = right.trim();
+      final space = effectiveCharsPerLine - left.length - right.length;
+      if (space < 1) {
+        final maxLeft = effectiveCharsPerLine - right.length - 1;
+        if (maxLeft < 1) {
+          return (left + right).substring(0, effectiveCharsPerLine);
+        }
+        left = left.substring(0, maxLeft);
+        return '$left $right';
+      }
+      return left + ' ' * space + right;
+    }
+
+    void addLine(String text) => cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': '$text\n'},
+          ),
+        );
+    void setAlign(String align) => cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'align': align},
+          ),
+        );
+    void setBold(bool bold) => cmds.add(
+          EpsonPrintCommand(
+            type: EpsonCommandType.textStyle,
+            parameters: {
+              'reverse': 'false',
+              'underline': 'false',
+              'bold': bold ? 'true' : 'false',
+              'color': '1',
+            },
+          ),
+        );
+
+    // Header: store name / logo / address
+    setAlign('center');
+    final storeName = data.storeName.trim();
+    if (storeName.isNotEmpty) {
+      for (final line in wrapText(storeName, effectiveCharsPerLine)) {
+        addLine(line);
+      }
+    }
+
+    if (data.logoBase64 != null && data.logoBase64!.isNotEmpty) {
+      try {
+        final bytes = base64Decode(data.logoBase64!);
+        final tmpDir = Directory.systemTemp;
+        final file = File(
+            '${tmpDir.path}/epson_terminal_logo_${DateTime.now().millisecondsSinceEpoch}.png');
+        file.writeAsBytesSync(bytes, flush: true);
+
+        int estimatePrinterDots() {
+          switch (epsonWidth ?? '80mm') {
+            case '58mm':
+              return 384;
+            case '60mm':
+              return 424;
+            case '70mm':
+              return 495;
+            case '76mm':
+              return 536;
+            case '80mm':
+              return 576;
+            default:
+              return 576;
+          }
+        }
+
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.image, parameters: {
+          'imagePath': file.path,
+          'printerWidth': estimatePrinterDots(),
+          'targetWidth': 200,
+          'align': 'center',
+          'advancedProcessing': false,
+        }));
+        cmds.add(EpsonPrintCommand(
+            type: EpsonCommandType.feed, parameters: {'line': 1}));
+      } catch (e) {
+        debugPrint('PrinterBridge: Terminal logo processing failed: $e');
+      }
+    }
+
+    final address = data.storeAddress.trim();
+    if (address.isNotEmpty) {
+      for (final line in wrapText(address, effectiveCharsPerLine)) {
+        addLine(line);
+      }
+    }
+
+    setAlign('left');
+    addLine(horizontalLine());
+
+    // Transaction record block (mirrors the fields/order of the existing
+    // embedded block in _buildEpsonReceiptCommands, duplicated standalone).
+    final meta = data.metadata;
+    final isVoid = _isVoidContext(data.saleContext);
+    final showAacInsteadOfTc = data.saleContext == 'REFUND' || data.isDeclined;
+    setBold(true);
+    setAlign('center');
+    addLine(langCon.transactionRecord);
+    setBold(false);
+    setAlign('left');
+    addLine(leftRight(meta.cardBrand ?? '', meta.cardEntry ?? ''));
+    addLine(leftRight(langCon.card, meta.cardMask4 ?? ''));
+    if (!data.isDeclined) {
+      addLine(leftRight(langCon.authCode, meta.authCode ?? ''));
+    }
+    addLine(leftRight(langCon.ref, meta.paymentId ?? ''));
+    if ((meta.merchantId ?? '').isNotEmpty) {
+      addLine(leftRight(langCon.merchantIdLabel, meta.merchantId ?? ''));
+    }
+    if ((meta.terminalId ?? '').isNotEmpty) {
+      addLine(leftRight(langCon.terminalIdLabel, meta.terminalId ?? ''));
+    }
+    if ((meta.rrn ?? '').isNotEmpty) {
+      addLine(leftRight(langCon.rrnLabel, meta.rrn ?? ''));
+    }
+    if ((meta.batchDisplay ?? '').isNotEmpty) {
+      addLine(leftRight(langCon.batchNumberLabel, meta.batchDisplay ?? ''));
+    }
+    if ((meta.traceNumber ?? '').isNotEmpty) {
+      addLine(leftRight(langCon.traceNumberLabel, meta.traceNumber ?? ''));
+    }
+    addLine(leftRight(meta.paymentDate ?? '', meta.paymentTime ?? ''));
+    setBold(true);
+    setAlign('center');
+    addLine(_terminalTransactionLabel(data.saleContext));
+    setAlign('left');
+    final amountDisplay = '${meta.paymentCurrencyCode} '
+        '${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}';
+    if (meta.showAmountBreakdown) {
+      // Some acquirers mandate an Amount/Subtotal/Total breakdown; all
+      // three render the same transactionAmount value.
+      addLine(leftRight(langCon.amountLabel, amountDisplay));
+      addLine(leftRight(langCon.subtotalLabel, amountDisplay));
+      addLine(horizontalLine());
+      addLine(leftRight(langCon.total, amountDisplay));
+    } else {
+      addLine(leftRight(langCon.total, amountDisplay));
+    }
+    setAlign('center');
+    addLine(meta.approvalMessage ?? '');
+    if ((meta.cvm ?? '').toUpperCase() == 'NO CVM') {
+      addLine(langCon.noSignatureRequired);
+    }
+    setBold(false);
+    if (!isVoid) {
+      addLine(meta.accountType ?? '');
+      setAlign('left');
+      if ((meta.availableBalance ?? '').isNotEmpty) {
+        addLine(leftRight(
+            langCon.availableBalanceLabel,
+            '${meta.paymentCurrencyCode} '
+                '${meta.paymentCurrencySymbol}${meta.availableBalance}'));
+      }
+      addLine(leftRight(langCon.aid, meta.cardAid ?? ''));
+      // Omitted when the acquirer's required-fields list excludes them.
+      if (meta.showEmvTags) {
+        addLine(leftRight(
+            showAacInsteadOfTc ? langCon.aac : langCon.tc, meta.tagAac ?? ''));
+        addLine(leftRight(langCon.tvr, meta.tagTvr ?? ''));
+        addLine(leftRight(langCon.tsi, meta.tagTsi ?? ''));
+      }
+    }
+    addLine(horizontalLine());
+
+    // CLIENT COPY / MERCHANT COPY
+    setBold(true);
+    setAlign('center');
+    addLine(data.receiptFor == 'CLIENT' ? langCon.clientCopy : langCon.merchantCopy);
+    setBold(false);
+    setAlign('left');
+
     cmds.add(
       EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
     );
@@ -1752,9 +2332,20 @@ class PrinterBridge {
               // Pass generic taxes map (supports any tax type from order_tax_breakdown)
               'taxes': receiptData.taxes?.map((taxName, taxAmount) => 
                 MapEntry(taxName, taxAmount.toStringAsFixed(2))),
+              'totalExchanges': receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty
+                  ? '-${receiptData.exchangeTotal.toStringAsFixed(2)}'
+                  : null,
               'total': receiptData.total?.toStringAsFixed(2),
-              'payments': receiptData.payments?.map((method, amount) => 
-                MapEntry(method, amount.toStringAsFixed(2))),
+              // Graphics-only printers (e.g. TSP100IIIW) render this legacy map as
+              // one image; the terminal metadata block is only produced on the
+              // command-based path below. Collapse to method→amount here.
+              'payments': receiptData.payments == null
+                  ? null
+                  : {
+                      for (final p in receiptData.payments!)
+                        p.method: (p.metadata?.transactionAmount ??
+                            p.amount.toStringAsFixed(2)),
+                    },
             },
           },
           'items': receiptData.items.map((item) => <String, dynamic>{
@@ -1766,6 +2357,11 @@ class PrinterBridge {
             'quantity': returnItem.quantity.toString(),
             'name': returnItem.itemName,
             if (!receiptData.isGiftReceipt) 'price': returnItem.unitPrice.toStringAsFixed(2),
+          }).toList(),
+          'exchangeItems': receiptData.exchangeItems?.map((exchangeItem) => <String, dynamic>{
+            'quantity': exchangeItem.quantity.toString(),
+            'name': exchangeItem.itemName,
+            if (!receiptData.isGiftReceipt) 'price': exchangeItem.totalPrice.toStringAsFixed(2),
           }).toList(),
           'image': receiptData.logoBase64 == null
               ? null
@@ -1935,6 +2531,26 @@ class PrinterBridge {
       }
     }
 
+    // 9b. EXCHANGE/TRADE-IN ITEMS (if any)
+    if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+      cmds.add(StarPrintCommand.feed(1));
+      cmds.add(StarPrintCommand.text('${langCon.tradeInsExchanges}\n', bold: true));
+      
+      for (final exchangeItem in receiptData.exchangeItems!) {
+        if (receiptData.isGiftReceipt) {
+          cmds.add(StarPrintCommand.text(
+            '${exchangeItem.quantity} x ${exchangeItem.itemName}\n',
+          ));
+        } else {
+          cmds.add(StarPrintCommand.textColumns([
+            StarColumn(text: '${exchangeItem.quantity} x', weight: 1, align: StarAlignment.left),
+            StarColumn(text: exchangeItem.itemName, weight: 5, align: StarAlignment.left),
+            StarColumn(text: '-${exchangeItem.totalPrice.toStringAsFixed(2)}', weight: 2, align: StarAlignment.right),
+          ]));
+        }
+      }
+    }
+
     cmds.add(StarPrintCommand.line());
 
     // 10. FINANCIAL SUMMARY (skip for gift receipts)
@@ -1964,6 +2580,14 @@ class PrinterBridge {
           }
         }
       }
+
+      // Trade-ins/Exchanges summary line
+      if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+        cmds.add(StarPrintCommand.textLeftRight(
+          langCon.tradeInsExchanges,
+          '-${receiptData.exchangeTotal.toStringAsFixed(2)}',
+        ));
+      }
       
       if (receiptData.total != null) {
         cmds.add(StarPrintCommand.textLeftRight(
@@ -1981,11 +2605,58 @@ class PrinterBridge {
           align: StarAlignment.center,
         ));
         
-        for (final entry in receiptData.payments!.entries) {
-          cmds.add(StarPrintCommand.textLeftRight(
-            entry.key,
-            '${entry.value.toStringAsFixed(2)}',
-          ));
+        for (final payment in receiptData.payments!) {
+          final meta = payment.metadata;
+          if (meta != null) {
+            // Terminal payment: full transaction record block (mirrors web
+            // getPaymentMarkup). Refunds branch on payment.isRefund.
+            final isRefund = payment.isRefund;
+            // Summary line: localized method -> signed amount
+            cmds.add(StarPrintCommand.textLeftRight(
+                payment.method, payment.amount.toStringAsFixed(2)));
+            cmds.add(StarPrintCommand.text('${langCon.transactionRecord}\n',
+                align: StarAlignment.center, bold: true));
+            cmds.add(StarPrintCommand.textLeftRight(
+                meta.cardBrand ?? '', meta.cardEntry ?? ''));
+            cmds.add(StarPrintCommand.textLeftRight(
+                langCon.card, meta.cardMask4 ?? ''));
+            cmds.add(StarPrintCommand.textLeftRight(
+                langCon.authCode, meta.authCode ?? ''));
+            cmds.add(StarPrintCommand.textLeftRight(
+                langCon.ref, meta.paymentId ?? ''));
+            cmds.add(StarPrintCommand.textLeftRight(
+                meta.paymentDate ?? '', meta.paymentTime ?? ''));
+            cmds.add(StarPrintCommand.text(
+                '${isRefund ? langCon.refundLabel : langCon.saleLabel}\n',
+                align: StarAlignment.center, bold: true));
+            cmds.add(StarPrintCommand.textLeftRight(
+                langCon.total,
+                '${meta.paymentCurrencyCode} '
+                    '${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}',
+                bold: true));
+            cmds.add(StarPrintCommand.text('${meta.approvalMessage ?? ''}\n',
+                align: StarAlignment.center, bold: true));
+            cmds.add(StarPrintCommand.text('${meta.accountType ?? ''}\n',
+                align: StarAlignment.center));
+            cmds.add(StarPrintCommand.textLeftRight(
+                langCon.aid, meta.cardAid ?? ''));
+            // Omitted when the acquirer's required-fields list excludes them.
+            if (meta.showEmvTags) {
+              cmds.add(StarPrintCommand.textLeftRight(
+                  isRefund ? langCon.aac : langCon.tc, meta.tagAac ?? ''));
+              cmds.add(StarPrintCommand.textLeftRight(
+                  langCon.tvr, meta.tagTvr ?? ''));
+              cmds.add(StarPrintCommand.textLeftRight(
+                  langCon.tsi, meta.tagTsi ?? ''));
+            }
+            cmds.add(StarPrintCommand.line());
+          } else {
+            // Simple line: signed amount (negative for refunds/returns)
+            cmds.add(StarPrintCommand.textLeftRight(
+              payment.method,
+              payment.amount.toStringAsFixed(2),
+            ));
+          }
         }
         cmds.add(StarPrintCommand.feed(1));
       }
@@ -2005,6 +2676,172 @@ class PrinterBridge {
     }
 
     // 13. FEED AND CUT
+    cmds.add(StarPrintCommand.feed(3));
+    cmds.add(StarPrintCommand.cut());
+
+    return cmds;
+  }
+
+  static Future<bool> _printStarTerminalReceipt(
+    PrinterTerminalReceiptData data,
+  ) async {
+    try {
+      final commands = _buildStarTerminalCommands(data);
+      final printJob = star.PrintJob(
+        content: '',
+        commands: commands.map((cmd) => cmd.toMap()).toList(),
+        // The native plugin reads printableAreaMm from here even on the
+        // command-based path (it drives textLeftRight column widths and
+        // image centering) — without it, it falls back to raw model
+        // detection instead of the printer's actually-configured paper
+        // width, which is what was throwing off alignment on this path.
+        // Mirrors the value _printStarReceipt supplies for bill/gift receipts.
+        settings: {
+          'layout': {
+            'details': {
+              'printableAreaMm': PrinterBridge.starConfig.printableAreaMm,
+            },
+          },
+        },
+      );
+      await star.StarPrinter.printReceipt(printJob);
+      return true;
+    } catch (e) {
+      debugPrint('Star terminal receipt print failed: $e');
+      return false;
+    }
+  }
+
+  /// Build Star commands for a standalone terminal (card transaction) slip.
+  /// Deliberately independent of [_buildStarReceiptCommands] — mirrors its
+  /// header/transaction-record rendering but produces a minimal slip with no
+  /// items/totals, plus a CLIENT COPY/MERCHANT COPY line.
+  static List<StarPrintCommand> _buildStarTerminalCommands(
+    PrinterTerminalReceiptData data,
+  ) {
+    final List<StarPrintCommand> cmds = [];
+
+    if (data.storeName.isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${data.storeName}\n',
+        align: StarAlignment.center,
+        bold: true,
+        magnificationWidth: 2,
+        magnificationHeight: 2,
+      ));
+      cmds.add(StarPrintCommand.feed(1));
+    }
+
+    if (data.logoBase64 != null && data.logoBase64!.isNotEmpty) {
+      cmds.add(StarPrintCommand.image(
+        data.logoBase64!,
+        width: 200,
+        align: StarAlignment.center,
+      ));
+      cmds.add(StarPrintCommand.feed(1));
+    }
+
+    if (data.storeAddress.isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${data.storeAddress}\n',
+        align: StarAlignment.center,
+      ));
+    }
+
+    cmds.add(StarPrintCommand.feed(1));
+    cmds.add(StarPrintCommand.line());
+
+    // Transaction record block (mirrors the fields/order of the existing
+    // embedded block in _buildStarReceiptCommands, duplicated standalone).
+    final meta = data.metadata;
+    final isVoid = _isVoidContext(data.saleContext);
+    final showAacInsteadOfTc = data.saleContext == 'REFUND' || data.isDeclined;
+
+    cmds.add(StarPrintCommand.text(
+      '${langCon.transactionRecord}\n',
+      align: StarAlignment.center,
+      bold: true,
+    ));
+    cmds.add(StarPrintCommand.textLeftRight(meta.cardBrand ?? '', meta.cardEntry ?? ''));
+    cmds.add(StarPrintCommand.textLeftRight(langCon.card, meta.cardMask4 ?? ''));
+    if (!data.isDeclined) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.authCode, meta.authCode ?? ''));
+    }
+    cmds.add(StarPrintCommand.textLeftRight(langCon.ref, meta.paymentId ?? ''));
+    if ((meta.merchantId ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.merchantIdLabel, meta.merchantId ?? ''));
+    }
+    if ((meta.terminalId ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.terminalIdLabel, meta.terminalId ?? ''));
+    }
+    if ((meta.rrn ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.rrnLabel, meta.rrn ?? ''));
+    }
+    if ((meta.batchDisplay ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.batchNumberLabel, meta.batchDisplay ?? ''));
+    }
+    if ((meta.traceNumber ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.traceNumberLabel, meta.traceNumber ?? ''));
+    }
+    cmds.add(StarPrintCommand.textLeftRight(meta.paymentDate ?? '', meta.paymentTime ?? ''));
+    cmds.add(StarPrintCommand.text(
+      '${_terminalTransactionLabel(data.saleContext)}\n',
+      align: StarAlignment.center,
+      bold: true,
+    ));
+    final amountDisplay =
+        '${meta.paymentCurrencyCode} ${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}';
+    if (meta.showAmountBreakdown) {
+      // Some acquirers mandate an Amount/Subtotal/Total breakdown; all
+      // three render the same transactionAmount value.
+      cmds.add(StarPrintCommand.textLeftRight(langCon.amountLabel, amountDisplay, bold: true));
+      cmds.add(StarPrintCommand.textLeftRight(langCon.subtotalLabel, amountDisplay, bold: true));
+      cmds.add(StarPrintCommand.line());
+      cmds.add(StarPrintCommand.textLeftRight(langCon.total, amountDisplay, bold: true));
+    } else {
+      cmds.add(StarPrintCommand.textLeftRight(langCon.total, amountDisplay, bold: true));
+    }
+    if ((meta.approvalMessage ?? '').isNotEmpty) {
+      cmds.add(StarPrintCommand.text(
+        '${meta.approvalMessage}\n',
+        align: StarAlignment.center,
+        bold: true,
+      ));
+    }
+    if ((meta.cvm ?? '').toUpperCase() == 'NO CVM') {
+      cmds.add(StarPrintCommand.text(
+        '${langCon.noSignatureRequired}\n',
+        align: StarAlignment.center,
+      ));
+    }
+
+    if (!isVoid) {
+      if ((meta.accountType ?? '').isNotEmpty) {
+        cmds.add(StarPrintCommand.text('${meta.accountType}\n'));
+      }
+      if ((meta.availableBalance ?? '').isNotEmpty) {
+        cmds.add(StarPrintCommand.textLeftRight(
+            langCon.availableBalanceLabel,
+            '${meta.paymentCurrencyCode} ${meta.paymentCurrencySymbol}${meta.availableBalance}'));
+      }
+      cmds.add(StarPrintCommand.textLeftRight(langCon.aid, meta.cardAid ?? ''));
+      // Omitted when the acquirer's required-fields list excludes them.
+      if (meta.showEmvTags) {
+        cmds.add(StarPrintCommand.textLeftRight(
+            showAacInsteadOfTc ? langCon.aac : langCon.tc, meta.tagAac ?? ''));
+        cmds.add(StarPrintCommand.textLeftRight(langCon.tvr, meta.tagTvr ?? ''));
+        cmds.add(StarPrintCommand.textLeftRight(langCon.tsi, meta.tagTsi ?? ''));
+      }
+    }
+    cmds.add(StarPrintCommand.line());
+
+    // CLIENT COPY / MERCHANT COPY
+    cmds.add(StarPrintCommand.text(
+      '${data.receiptFor == 'CLIENT' ? langCon.clientCopy : langCon.merchantCopy}\n',
+      align: StarAlignment.center,
+      bold: true,
+    ));
+
     cmds.add(StarPrintCommand.feed(3));
     cmds.add(StarPrintCommand.cut());
 
@@ -2406,6 +3243,42 @@ $logoZpl^FS''';
       }
     }
 
+    // Exchange/Trade-in items section
+    if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+      yPosition += 28; // Half spacing for whitespace
+      
+      // "Trade-ins/Exchanges" header
+      receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FD${langCon.tradeInsExchanges}^FS''';
+      yPosition += 56;
+      
+      for (var exchangeItem in receiptData.exchangeItems!) {
+        if (receiptData.isGiftReceipt) {
+          receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FD${exchangeItem.quantity} x ${exchangeItem.itemName}^FS''';
+        } else {
+          String exchangePriceText = "-${exchangeItem.totalPrice.toStringAsFixed(2)}";
+          int exchangePriceCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedExchangePriceWidth = exchangePriceText.length * exchangePriceCharWidth;
+          int exchangePriceX = (width - estimatedExchangePriceWidth - 20) - exchangePriceCharWidth;
+          exchangePriceX = exchangePriceX.clamp(200, width - estimatedExchangePriceWidth);
+          
+          receiptZpl += '''
+^CF0,25
+^FO20,$yPosition
+^FD${exchangeItem.quantity} x ${exchangeItem.itemName}^FS
+^CF0,25
+^FO$exchangePriceX,$yPosition
+^FD$exchangePriceText^FS''';
+        }
+        yPosition += 56;
+      }
+    }
+
     // Calculate positions for bottom elements after line items
     int bottomLineY = yPosition + 20; // Add some spacing after last item
     int totalY = bottomLineY + 22; // Add spacing after bottom line
@@ -2481,6 +3354,24 @@ $logoZpl^FS''';
             }
           }
         }
+
+        // Trade-ins/Exchanges summary line
+        if (receiptData.exchangeItems != null && receiptData.exchangeItems!.isNotEmpty) {
+          String exchangeTotalText = "-${receiptData.exchangeTotal.toStringAsFixed(2)}";
+          int exchangeTotalCharWidth = getCharWidthInDots(25, dpi);
+          int estimatedExchangeTotalWidth = exchangeTotalText.length * exchangeTotalCharWidth;
+          int exchangeTotalX = (width - estimatedExchangeTotalWidth - 20) - exchangeTotalCharWidth;
+          exchangeTotalX = exchangeTotalX.clamp(200, width - estimatedExchangeTotalWidth);
+          
+          receiptZpl += '''
+^CF0,25
+^FO20,$currentY
+^FD${langCon.tradeInsExchanges}^FS
+^CF0,25
+^FO$exchangeTotalX,$currentY
+^FD$exchangeTotalText^FS''';
+          currentY += 40;
+        }
         
         if (receiptData.total != null) {
           String totalText = "${receiptData.total!.toStringAsFixed(2)}";
@@ -2525,31 +3416,96 @@ $logoZpl^FS''';
           
           paymentY += 40;
           
-          // Add each payment method with left-right alignment
-          receiptData.payments!.forEach((method, amount) {
-            String amountText = "${amount.toStringAsFixed(2)}";
-            if (amount < 0) {
-              amountText = "-${(-amount).toStringAsFixed(2)}";
-            }
-            int amountCharWidth = getCharWidthInDots(25, dpi);
-            int estimatedAmountWidth = amountText.length * amountCharWidth;
-            int amountX = (width - estimatedAmountWidth - 20);
-            // For negative numbers, shift left by one character to align decimal points
-            if (amount < 0) {
-              amountX -= amountCharWidth;
-            }
-            amountX = amountX.clamp(200, width - estimatedAmountWidth);
-            
+          // Emit one left-label / right-value row at the current paymentY,
+          // advancing paymentY by one line.
+          void addRow(String label, String value) {
+            int valueCharWidth = getCharWidthInDots(25, dpi);
+            int estimatedValueWidth = value.length * valueCharWidth;
+            int valueX = (width - estimatedValueWidth - 20);
+            valueX = valueX.clamp(200, width - estimatedValueWidth);
             receiptZpl += '''
 ^CF0,25
 ^FO20,$paymentY
-^FD$method^FS
+^FD$label^FS
+^CF0,25
+^FO$valueX,$paymentY
+^FD$value^FS''';
+            paymentY += 40;
+          }
+
+          // Center a single line at the current paymentY, advancing paymentY.
+          void addCentered(String text) {
+            if (text.isEmpty) return;
+            int cw = getCharWidthInDots(25, dpi);
+            int estWidth = text.length * cw;
+            int x = ((width - estWidth) ~/ 2).clamp(20, width - 20);
+            receiptZpl += '''
+^CF0,25
+^FO$x,$paymentY
+^FD$text^FS''';
+            paymentY += 40;
+          }
+
+          // Add each payment method with left-right alignment
+          for (final payment in receiptData.payments!) {
+            final meta = payment.metadata;
+            if (meta != null) {
+              // Terminal payment: full transaction record block (mirrors web
+              // getPaymentMarkup). Refunds branch on payment.isRefund.
+              final isRefund = payment.isRefund;
+              // Summary line: localized method -> signed amount
+              addRow(payment.method, payment.amount.toStringAsFixed(2));
+              addCentered(langCon.transactionRecord);
+              addRow(meta.cardBrand ?? '', meta.cardEntry ?? '');
+              addRow(langCon.card, meta.cardMask4 ?? '');
+              addRow(langCon.authCode, meta.authCode ?? '');
+              addRow(langCon.ref, meta.paymentId ?? '');
+              addRow(meta.paymentDate ?? '', meta.paymentTime ?? '');
+              addCentered(isRefund ? langCon.refundLabel : langCon.saleLabel);
+              addRow(
+                  langCon.total,
+                  '${meta.paymentCurrencyCode} '
+                      '${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}');
+              addCentered(meta.approvalMessage ?? '');
+              addCentered(meta.accountType ?? '');
+              addRow(langCon.aid, meta.cardAid ?? '');
+              // Omitted when the acquirer's required-fields list excludes them.
+              if (meta.showEmvTags) {
+                addRow(isRefund ? langCon.aac : langCon.tc, meta.tagAac ?? '');
+                addRow(langCon.tvr, meta.tagTvr ?? '');
+                addRow(langCon.tsi, meta.tagTsi ?? '');
+              }
+              // Divider after the block
+              receiptZpl += '''
+^FO20,$paymentY^GB$lineWidth,1,2,B,0^FS''';
+              paymentY += 20;
+            } else {
+              // Simple line: signed amount (negative for refunds/returns)
+              final amount = payment.amount;
+              String amountText = amount.toStringAsFixed(2);
+              if (amount < 0) {
+                amountText = "-${(-amount).toStringAsFixed(2)}";
+              }
+              int amountCharWidth = getCharWidthInDots(25, dpi);
+              int estimatedAmountWidth = amountText.length * amountCharWidth;
+              int amountX = (width - estimatedAmountWidth - 20);
+              // For negative numbers, shift left by one character to align decimal points
+              if (amount < 0) {
+                amountX -= amountCharWidth;
+              }
+              amountX = amountX.clamp(200, width - estimatedAmountWidth);
+
+              receiptZpl += '''
+^CF0,25
+^FO20,$paymentY
+^FD${payment.method}^FS
 ^CF0,25
 ^FO$amountX,$paymentY
 ^FD$amountText^FS''';
-            paymentY += 40;
-          });
-          
+              paymentY += 40;
+            }
+          }
+
           // Update thank you position after payment methods
           thankYouY = paymentY + 20;
         }
@@ -2606,6 +3562,205 @@ $logoZpl^FS''';
 ^XZ''';
 
     return receiptZpl;
+  }
+
+  static Future<bool> _printZebraTerminalReceipt(
+    PrinterTerminalReceiptData data, [
+    Map<String, int>? dimensions,
+  ]) async {
+    try {
+      Map<String, int>? effectiveDimensions = dimensions;
+      effectiveDimensions ??= await getZebraDimensions();
+
+      final width = effectiveDimensions?['printWidthInDots'] ?? 386;
+      final height = effectiveDimensions?['labelLengthInDots'] ?? 600;
+      final dpi = effectiveDimensions?['dpi'] ?? 203;
+
+      final zpl = _generateZebraTerminalZPL(width, height, dpi, data);
+      await ZebraPrinter.sendCommands(zpl, language: ZebraPrintLanguage.zpl);
+
+      // Reset label length back to default, same as the full-receipt path.
+      const resetHeightZpl = '^XA^LL1225^XZ';
+      await ZebraPrinter.sendCommands(resetHeightZpl, language: ZebraPrintLanguage.zpl);
+
+      return true;
+    } catch (e) {
+      debugPrint('Zebra terminal receipt print failed: $e');
+      return false;
+    }
+  }
+
+  /// Generate Zebra ZPL for a standalone terminal (card transaction) slip.
+  /// Deliberately independent of [_generateZebraReceiptZPL] — mirrors its
+  /// header/transaction-record positioning but produces a minimal slip with
+  /// no items/totals, plus a CLIENT COPY/MERCHANT COPY line.
+  static String _generateZebraTerminalZPL(
+    int width,
+    int height,
+    int dpi,
+    PrinterTerminalReceiptData data,
+  ) {
+    int getCharWidthInDots(int fontSize, int dpi) {
+      if (fontSize <= 25) {
+        return 10;
+      } else if (fontSize <= 30) {
+        return 12;
+      } else if (fontSize <= 38) {
+        return 20;
+      } else if (fontSize <= 47) {
+        return 24;
+      } else {
+        return (fontSize * 0.5).round();
+      }
+    }
+
+    final storeNameCharWidth = getCharWidthInDots(47, dpi);
+    final storeAddressCharWidth = getCharWidthInDots(27, dpi);
+
+    final estimatedStoreNameWidth = data.storeName.length * storeNameCharWidth;
+    final estimatedStoreAddressWidth =
+        data.storeAddress.length * storeAddressCharWidth;
+
+    var storeNameX = (width - estimatedStoreNameWidth) ~/ 2;
+    var storeAddressX = (width - estimatedStoreAddressWidth) ~/ 2;
+    storeNameX = storeNameX.clamp(0, width);
+    storeAddressX = storeAddressX.clamp(0, width);
+
+    String zpl = '''
+^XA^CI28
+^CF0,47
+^FO$storeNameX,40
+^FD${data.storeName}^FS
+^CF0,27
+^FO$storeAddressX,100
+^FD${data.storeAddress}^FS''';
+
+    var y = 150;
+    zpl += '''
+^FO20,$y^GB${width - 40},1,2,B,0^FS''';
+    y += 30;
+
+    void addRow(String label, String value) {
+      final valueCharWidth = getCharWidthInDots(25, dpi);
+      final estimatedValueWidth = value.length * valueCharWidth;
+      var valueX = width - estimatedValueWidth - 20;
+      valueX = valueX.clamp(200, width - estimatedValueWidth);
+      zpl += '''
+^CF0,25
+^FO20,$y
+^FD$label^FS
+^CF0,25
+^FO$valueX,$y
+^FD$value^FS''';
+      y += 40;
+    }
+
+    void addCentered(String text, {bool bold = false}) {
+      if (text.isEmpty) return;
+      final fontSize = bold ? 30 : 25;
+      final cw = getCharWidthInDots(fontSize, dpi);
+      final estWidth = text.length * cw;
+      var x = (width - estWidth) ~/ 2;
+      x = x.clamp(20, width - 20);
+      zpl += '''
+^CF0,$fontSize
+^FO$x,$y
+^FD$text^FS''';
+      y += 40;
+    }
+
+    void addDivider() {
+      zpl += '''
+^FO20,$y^GB${width - 40},1,2,B,0^FS''';
+      y += 20;
+    }
+
+    // Transaction record block (mirrors the fields/order of the existing
+    // embedded block in _generateZebraReceiptZPL, duplicated standalone).
+    final meta = data.metadata;
+    final isVoid = _isVoidContext(data.saleContext);
+    final showAacInsteadOfTc = data.saleContext == 'REFUND' || data.isDeclined;
+
+    addCentered(langCon.transactionRecord, bold: true);
+    addRow(meta.cardBrand ?? '', meta.cardEntry ?? '');
+    addRow(langCon.card, meta.cardMask4 ?? '');
+    if (!data.isDeclined) {
+      addRow(langCon.authCode, meta.authCode ?? '');
+    }
+    addRow(langCon.ref, meta.paymentId ?? '');
+    if ((meta.merchantId ?? '').isNotEmpty) {
+      addRow(langCon.merchantIdLabel, meta.merchantId ?? '');
+    }
+    if ((meta.terminalId ?? '').isNotEmpty) {
+      addRow(langCon.terminalIdLabel, meta.terminalId ?? '');
+    }
+    if ((meta.rrn ?? '').isNotEmpty) {
+      addRow(langCon.rrnLabel, meta.rrn ?? '');
+    }
+    if ((meta.batchDisplay ?? '').isNotEmpty) {
+      addRow(langCon.batchNumberLabel, meta.batchDisplay ?? '');
+    }
+    if ((meta.traceNumber ?? '').isNotEmpty) {
+      addRow(langCon.traceNumberLabel, meta.traceNumber ?? '');
+    }
+    addRow(meta.paymentDate ?? '', meta.paymentTime ?? '');
+    addCentered(_terminalTransactionLabel(data.saleContext), bold: true);
+    final amountDisplay =
+        '${meta.paymentCurrencyCode} ${meta.paymentCurrencySymbol}${meta.transactionAmount ?? ''}';
+    if (meta.showAmountBreakdown) {
+      // Some acquirers mandate an Amount/Subtotal/Total breakdown; all
+      // three render the same transactionAmount value.
+      addRow(langCon.amountLabel, amountDisplay);
+      addRow(langCon.subtotalLabel, amountDisplay);
+      addDivider();
+      addRow(langCon.total, amountDisplay);
+    } else {
+      addRow(langCon.total, amountDisplay);
+    }
+    addCentered(meta.approvalMessage ?? '', bold: true);
+    if ((meta.cvm ?? '').toUpperCase() == 'NO CVM') {
+      addCentered(langCon.noSignatureRequired);
+    }
+    if (!isVoid) {
+      addCentered(meta.accountType ?? '');
+      if ((meta.availableBalance ?? '').isNotEmpty) {
+        addRow(langCon.availableBalanceLabel,
+            '${meta.paymentCurrencyCode} ${meta.paymentCurrencySymbol}${meta.availableBalance}');
+      }
+      addRow(langCon.aid, meta.cardAid ?? '');
+      // Omitted when the acquirer's required-fields list excludes them.
+      if (meta.showEmvTags) {
+        addRow(showAacInsteadOfTc ? langCon.aac : langCon.tc, meta.tagAac ?? '');
+        addRow(langCon.tvr, meta.tagTvr ?? '');
+        addRow(langCon.tsi, meta.tagTsi ?? '');
+      }
+    }
+
+    zpl += '''
+^FO20,$y^GB${width - 40},1,2,B,0^FS''';
+    y += 30;
+
+    // CLIENT COPY / MERCHANT COPY
+    addCentered(
+        data.receiptFor == 'CLIENT' ? langCon.clientCopy : langCon.merchantCopy,
+        bold: true);
+
+    final minRequiredHeight = y + 60;
+    final actualReceiptHeight =
+        height > minRequiredHeight ? height : minRequiredHeight;
+
+    if (actualReceiptHeight > height) {
+      zpl = '''
+^XA
+^LL$actualReceiptHeight
+''' +
+          zpl.substring(4);
+    }
+
+    zpl += '''
+^XZ''';
+
+    return zpl;
   }
 
   static String _generateZebraLabelZPL(

@@ -920,11 +920,11 @@ class _MyHomePageState extends State<MyHomePage> {
       total: 331.09,
 
       //payment
-      payments: {
-        'Cash': 304.30, 
-        'Credit Card': 70.00,
-        'Store Credit': -38.00, // Return refund
-      },
+      payments: [
+        PrinterPayment(method: 'Cash', amount: 304.30),
+        PrinterPayment(method: 'Credit Card', amount: 70.00),
+        PrinterPayment(method: 'Store Credit', amount: -38.00), // Return refund
+      ],
     );
   }
 

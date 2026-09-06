@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *discoveredPrinters;
 @property (nonatomic, assign) BOOL isBluetoothDiscovery; // Track if current discovery is Bluetooth (for early termination)
 @property (nonatomic, strong, nullable) dispatch_block_t bluetoothTimeoutBlock; // Track Bluetooth timeout to cancel overlaps
+@property (nonatomic, copy, nullable) void (^printCompletionHandler)(BOOL success, int32_t code);
 
 - (void)startDiscoveryWithFilter:(int32_t)filter completion:(void (^)(NSArray<NSDictionary *> *printers))completion;
 - (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion; // Classic BT only (BLE disabled)
@@ -26,6 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)disconnect;
 - (NSDictionary *)getPrinterStatus;
 - (BOOL)printWithCommands:(NSArray<NSDictionary *> *)commands;
+- (void)printWithCommands:(NSArray<NSDictionary *> *)commands completion:(void (^)(BOOL success, int32_t code))completion;
 - (void)clearCommandBuffer;
 - (BOOL)openCashDrawer;
 - (void)pairBluetoothDeviceWithCompletion:(void (^)(NSString * _Nullable target, int result))completion;
